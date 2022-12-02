@@ -36,3 +36,5 @@ C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\U
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\UglyToad.PdfPig.Tokens.xml
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\Newtonsoft.Json.dll
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\Newtonsoft.Json.xml
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\DataTableAsync.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\DataTableAsync.pdb

@@ -5,13 +5,17 @@ using System.Diagnostics;
 using System.Linq;
 using System.Windows.Forms;
 using System.IO;
-//using HtmlAgilityPack;
 using HtmlDocument = HtmlAgilityPack.HtmlDocument;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Content;
 using Page = UglyToad.PdfPig.Content.Page;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
+using System.Drawing;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Geometry;
+using DataTableAsync;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace fhInventoryEditor
 {
@@ -22,13 +26,24 @@ namespace fhInventoryEditor
             InitializeComponent();
         }
         private static readonly DirectoryInfo jobsFolder = new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\");
-        private static readonly string accountName = "CentreLeCap"; // CentreLeCap, Centre Beaubien
+        private static readonly string accountName = "Centre Beaubien"; // CentreLeCap, Centre Beaubien
         private static readonly DirectoryInfo jobInfo = new DirectoryInfo($"{jobsFolder.FullName}{accountName}\\");
         private static readonly string htmlPath = $"{jobInfo.FullName}a_jobSummary\\index.html";
         private readonly HtmlDocument htmlEditor = new HtmlDocument();
 
         public enum PageRegion { none, contact, table_disclaimer, table_hdr, table_data, footer }
-        internal string Client
+        internal bool FormIsFrench { get; private set; }
+        internal List<string> ColumnNames { get; private set; }
+        private readonly Table itemTable = new Table();
+        private readonly Dictionary<PageRegion, Dictionary<byte, string>> regions = new Dictionary<PageRegion, Dictionary<byte, string>>
+        {
+            [PageRegion.contact] = new Dictionary<byte, string>(),
+            [PageRegion.table_hdr] = new Dictionary<byte, string> { [0] = string.Empty },
+            [PageRegion.table_data] = new Dictionary<byte, string>()
+        };
+
+#region" contact info "
+internal string Client
         {
             get { return client; }
             private set { } }
@@ -63,7 +78,7 @@ namespace fhInventoryEditor
             private set { }
         }
         private string repEmail;
-        private Dictionary<byte, Item> items { get; } = new Dictionary<byte, Item>();
+        #endregion
 
         private void Form1_Load(object sender, EventArgs e)
         {
@@ -79,12 +94,42 @@ namespace fhInventoryEditor
             Parse_deliveryForm();
             Debugger.Break();
         }
+        private static string CleanDescription(string descriptionIn)
+        {
+            string pad = new string(' ', 8);
+            descriptionIn += pad;
+            string newDescription = descriptionIn;
+            newDescription = Regex.Replace(newDescription, "\\sTRK\\s", "     ") + pad; // dont know what these are
+            newDescription = Regex.Replace(newDescription, " N[A-Z][0-9]{2} ", pad) + pad; // NS15 or NF13 etc
+            while (Regex.IsMatch(newDescription, " ([A-Z])\\1 "))
+            {
+                newDescription = Regex.Replace(newDescription, " ([A-Z])\\1 ", pad) + pad; // AA, BB, etc
+            }
+            newDescription = Regex.Replace(newDescription, " {2,}", " ") + pad;
+            newDescription = newDescription.Trim();
+            return newDescription;
+        }
         private void Parse_deliveryForm()
         {
+            List<FileInfo> deliveries = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories).Where(f => Regex.IsMatch(f.Name.ToLowerInvariant(), "delivery|livraison")));
             List<FileInfo> deliveryInfo = new List<FileInfo>(jobInfo.EnumerateFiles("*.pdf").Where(f => Regex.IsMatch(f.Name.ToLowerInvariant(), "delivery|livraison")));
             if (deliveryInfo.Any())
             {
-                FileInfo deliveryForm = deliveryInfo.First();
+                byte deliveryIndex = 0;
+                FileInfo deliveryForm = deliveries[deliveryIndex]; //deliveryInfo.First();
+                //Process.Start($"{deliveryForm.FullName}");
+                /// 0=cadens            NO "consists of:" wrapping... might be better to go for each line
+                /// 1=cdbc restigouche  100%
+                /// 2=beaubien (a)      100%
+                /// 3=beaubien (b)      100%
+                /// 4=leCap             NO wrap
+                /// 5=julesLeger        NO wrap
+                /// 6=onyva-hawkesbury  100%
+                /// 7=onyva-rockland    100%
+                /// 8=angelica          100%
+                /// 9=yaldei            
+
+                FormIsFrench = deliveryForm.Name.ToLowerInvariant().Contains("vérification");
                 const byte pageWidth = 112;
                 string emptyLine = new string(' ', pageWidth);
 
@@ -95,19 +140,58 @@ namespace fhInventoryEditor
                     var words_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<double, List<Word>>>>();
                     var letters_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<double, Dictionary<int, Letter>>>>();
                     var consecutiveLetters_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<byte, Dictionary<int, Letter>>>>();
-                    var regions_byPage = new Dictionary<byte, Dictionary<PageRegion, Dictionary<byte, string>>>();
-                    var items_byPage = new Dictionary<byte, Dictionary<byte, Item>>();
+                    var colRects = new Dictionary<string, PdfRectangle>();
+                    var colNames = new Dictionary<string, Word>();
+                    var cols = new List<double>();
 
                     foreach (Page page in document.GetPages())
                     {
                         var boxes = page.ExperimentalAccess.Paths.Select(p => p.GetBoundingRectangle()).Where(bb => bb.HasValue).Select(bb => bb.Value).ToList();
+                        var pdfRects = new List<PdfRectangle>(boxes.Distinct());
+                        pdfRects.Sort((r1, r2) =>
+                        {
+                            int lvl1 = r2.Bottom.CompareTo(r1.Bottom);
+                            if (lvl1 != 0)
+                                return lvl1;
+                            else
+                            {
+                                int lvl2 = r1.Width.CompareTo(r2.Width);
+                                if (lvl2 != 0) { return lvl2; }
+                                else
+                                {
+                                    int lvl3 = r1.Left.CompareTo(r2.Left);
+                                    return lvl3;
+                                }
+                            }
+                        });
 
                         byte pageNbr = Convert.ToByte(page.Number);
                         PageRegion pgRegion = new PageRegion();
                         List<Word> words = new List<Word>(page.GetWords());
+                        words.Sort((w1, w2) =>
+                        {
+                            int lvl1 = w2.BoundingBox.Bottom.CompareTo(w1.BoundingBox.Bottom);
+                            if (lvl1 != 0) return lvl1;
+                            else
+                            {
+                                int lvl2 = w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left);
+                                return lvl2;
+                            }
+                        });
+                        List<Letter> letters = new List<Letter>(page.Letters.OrderBy(l => l.GlyphRectangle.Left));
                         lines_byPage[pageNbr] = new Dictionary<byte, string>();
                         consecutiveLetters_byPage[pageNbr] = new Dictionary<byte, Dictionary<byte, Dictionary<int, Letter>>>();
-                        regions_byPage[pageNbr] = new Dictionary<PageRegion, Dictionary<byte, string>>();
+
+                        var firstColumnName = new List<Word>(words.Where(w => w.Text == "ITEM"));
+                        if (firstColumnName.Any() & pageNbr == 1)
+                        {
+                            var itemNbr = firstColumnName.First();
+                            var allColumnNames = new List<Word>(words.Where(w => w.BoundingBox.Bottom == itemNbr.BoundingBox.Bottom));
+                            ColumnNames = new List<string>(allColumnNames.Where(c => c.Text != "#").Select(c => c.Text));
+                            itemTable.Columns.Add("item", typeof(string));
+                            itemTable.Columns.Add("desc", typeof(string));
+                            itemTable.Columns.Add("qty", typeof(double));
+                        }
 
                         #region" fonts --> size(w,h) "
                         Dictionary<string, List<Word>> fonts =
@@ -117,24 +201,29 @@ namespace fhInventoryEditor
      orderby fontGroup.Key
      select new { FontName = fontGroup.Key, Words = new List<Word>(fontGroup) }).ToDictionary(k => k.FontName, v => v.Words);
                         fonts_byPage[pageNbr] = fonts;
-                        Dictionary<string, double> spacing_byFont = new Dictionary<string, double>();
+                        Dictionary<string, double> width_byFont = new Dictionary<string, double>();
+                        Dictionary<string, double> height_byFont = new Dictionary<string, double>();
                         foreach (string fontName in fonts.Keys)
                         {
                             double fw = 0;
+                            double fh = 0;
                             List<Word> fontWords = fonts[fontName];
                             fontWords.Sort((y1, y2) => y2.Letters.Count.CompareTo(y1.Letters.Count));
                             if (fontWords.Any())
                             {
                                 List<Letter> longestWordLetters = new List<Letter>(fontWords.First().Letters);
                                 List<double> fontXs = new List<double>(longestWordLetters.Select(x => Math.Round(x.Location.X, 1)).Distinct());
+                                List<double> fontHs = new List<double>(longestWordLetters.Select(x => Math.Round(x.GlyphRectangle.Height, 1)).Distinct());
                                 fw = Math.Round((fontXs.Max() - fontXs.Min()) / (fontXs.Count - 1), 1);
+                                fh = Math.Round(fontHs.Max(), 1);
                             }
-                            spacing_byFont.Add(fontName, fw);
+                            width_byFont.Add(fontName, fw);
+                            height_byFont.Add(fontName, fh);
                         }
                         fonts = fonts.OrderByDescending(f => f.Value.Count).ToDictionary(k => k.Key, v => v.Value);
                         string mostCommonFont = fonts.Keys.FirstOrDefault().ToString();
-                        double fontWidth = spacing_byFont[mostCommonFont];
-                        const byte fontHeight = 9;
+                        double fontWidth = width_byFont[mostCommonFont];
+                        double fontHeight = 10; //height_byFont[mostCommonFont];
                         #endregion
                         #region" words_thisPage "
                         var words_thisPage =
@@ -178,14 +267,23 @@ namespace fhInventoryEditor
                         letters_byPage[pageNbr] = letters_thisPage;
                         #endregion
 
-                        Dictionary<double, string> lines_thisPage = new Dictionary<double, string>();
-                        List<string> lines = new List<string>();
-                        string wordDelimiter = "\t";
+                        if (pageNbr == 1)
+                        {
+                            colNames = words.Where(w => ColumnNames.Contains(w.Text.Trim())).ToDictionary(k => k.Text, v => v);
+                            colRects = colNames.ToDictionary(k => k.Key, v => v.Value.BoundingBox);
+                            regions[PageRegion.table_hdr][0] = string.Join(" ", colNames.Keys);
+                        }
+                        else
+                            pgRegion = PageRegion.table_data;// page2+ is a continuation of the table from page1 etc
+
+                        var lines_thisPage = new Dictionary<double, string>();
+                        var lines = new List<string>();
+                        var tableRows = regions[PageRegion.table_data];
 
                         foreach (byte lineNbr in letters_thisPage.Keys)
                         {
                             byte groupIndex = 0;
-                            Dictionary<byte, Dictionary<int, Letter>> consecutiveLetters = new Dictionary<byte, Dictionary<int, Letter>>();
+                            var consecutiveLetters = new Dictionary<byte, Dictionary<int, Letter>>();
                             var lineGroups = letters_thisPage[lineNbr];
                             foreach (double lineY in lineGroups.Keys)
                             {
@@ -220,164 +318,159 @@ namespace fhInventoryEditor
                                 consecutiveLetters.Add((byte)consecutiveLetters.Count, letterGroup.Value);
 
                             consecutiveLetters_byPage[pageNbr][lineNbr] = consecutiveLetters;
-                            double left = consecutiveLetters[0][0].StartBaseLine.X;
-                            string lineData = $"{lineNbr:000}_{left:000.0}|" + string.Join("■", consecutiveLetters.Select(cl => string.Join(string.Empty, cl.Value.Select(l => l.Value.Value))));
+                            string line = string.Join("■", consecutiveLetters.Select(cl => string.Join(string.Empty, cl.Value.Select(l => l.Value.Value))));
+                            string lineData = $"{lineNbr:000}_{consecutiveLetters[0][0].StartBaseLine.X:000.0}|{line}";
                             lines.Add(lineData);
-                            
-                            List<string> wordGroups = new List<string>();
-                            foreach (var lettersGroup in consecutiveLetters)
-                            {
-                                /// calculate the relative position of each lettergroup (word)
-                                /// ex. page width = 600px, 1st word starts at 150px (25%)
-                                /// 112 characters wide would be 28th character
-                                string word = string.Join(string.Empty, lettersGroup.Value.OrderBy(l => l.Key).Select(l => l.Value.Value));
-                                if (pgRegion == PageRegion.table_hdr | pgRegion == PageRegion.table_data)
-                                    word = $"●{consecutiveLetters[lettersGroup.Key][0].StartBaseLine.X:N1}● {word}";
-                                wordGroups.Add(word);
-                            }
-                            
-                            string line = string.Join(wordDelimiter, wordGroups);
                             lines_thisPage[lineNbr] = line;
                             lines_byPage[pageNbr].Add((byte)lines_byPage[pageNbr].Count, line);
 
                             if (lineData.Contains("ITEM #"))
                             {
-                                // ITEM # | DESCRIPTION | QUANTITY | RECEIVED | MISSING
-                                // ITEM # | DESCRIPTION | QUANTITÉ | REÇU | MANQUANT
-                                pgRegion = PageRegion.table_hdr;
-                                regions_byPage[pageNbr][pgRegion] = new Dictionary<byte, string>();
-                                regions_byPage[pageNbr][pgRegion][0] = line; // table header is 1 line only
-                                wordDelimiter = "■";
-                            }
-                            else if (pgRegion == PageRegion.none & Regex.IsMatch(line, "v(e|é)rification", RegexOptions.IgnoreCase))
-                                pgRegion = PageRegion.contact;
+                                var colWord = colNames["ITEM"];
+                                var colRect = colWord.BoundingBox;
+                                var boundingRects = new List<PdfRectangle>(pdfRects.Where(r => r.Contains(colRect)).OrderBy(r => r.Area)); // smallest to largest
+                                var tableHeadRect = boundingRects.FirstOrDefault(); // this should be the table heading rectangle that contains the column names
+                                var intersectRects = new List<PdfRectangle>(pdfRects.Where(r => tableHeadRect.IntersectsWith(r)).OrderBy(r => r.Width));
+                                foreach (PdfRectangle r1 in intersectRects)
+                                {
+                                    foreach (PdfRectangle r2 in colRects.Values)
+                                    {
+                                        if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
+                                            Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
+                                    }
+                                    foreach (Word w in words)
+                                    {
+                                        var r2 = w.BoundingBox;
+                                        if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
+                                            Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
+                                    }
+                                    foreach (Letter l in letters)
+                                    {
+                                        var r2 = l.GlyphRectangle;
+                                        if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
+                                            Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
+                                    }
+                                }
+                                var lefts = new List<double>(intersectRects.Select(r => r.Left).Distinct());
+                                lefts.Sort();
+                                foreach (double l1 in lefts)
+                                {
+                                    var leftGroup = new List<double>();
+                                    foreach (var l2 in lefts)
+                                    {
+                                        double min = new double[] { l1, l2 }.Min();
+                                        double max = new double[] { l1, l2 }.Max();
+                                        double min_max = min / max;
+                                        if (min_max >= .9) leftGroup.Add(l2);
+                                    }
+                                    if (leftGroup.Any()) cols.Add(leftGroup.Min());
+                                }
+                                cols = cols.Distinct().ToList();
+                                cols.Sort();
+                                var cols_colRects = new List<double>();
+                                foreach (var cRect in colRects)
+                                {
+                                    var cR = cols.Where(c => c < cRect.Value.Left).Max();
+                                    cols_colRects.Add(cR);
+                                }
+                                cols = cols_colRects;
+                                cols.Sort();
 
+                                pgRegion = PageRegion.table_data;
+                            }
+                            else if (pgRegion == PageRegion.table_data)
+                            {
+                                const byte wordGrp = 0;
+                                var letterGrp = consecutiveLetters[wordGrp];
+                                Letter firstLetter_inWord = letterGrp[0];
+                                var colIndex = cols.IndexOf(cols.Where(c => c < firstLetter_inWord.StartBaseLine.X).Max());
+                                string code = string.Join(string.Empty, letterGrp.OrderBy(l => l.Key).Select(l => l.Value.Value)).Replace(" #", string.Empty).Trim();
+                                if (colIndex == 0)
+                                {
+                                    PdfRectangle letterGlyph = firstLetter_inWord.GlyphRectangle;
+                                    var xxx = new PdfRectangle(new PdfPoint(0, letterGlyph.BottomLeft.Y), new PdfPoint(1000, letterGlyph.TopRight.Y));
+                                    var wordsInRects = new List<Word>(words.Where(w => w.BoundingBox.IntersectsWith(xxx)));
+                                    var letters_thisLine =
+    (from ltr in wordsInRects
+     let isAbove = ltr.BoundingBox.Top > xxx.Centroid.Y
+     group ltr by isAbove into lineGroup
+     orderby lineGroup.Key descending
+     select new
+     {
+         above = lineGroup.Key,
+         words = new List<Word>(lineGroup.OrderBy(w => w.BoundingBox.Left))
+     }).ToDictionary(k => k.above, v => v.words);
+                                    var words_byColumn = new Dictionary<string, List<Word>>();
+                                    foreach (var isAbove in letters_thisLine)
+                                    {
+                                        foreach (var word in letters_thisLine[isAbove.Key])
+                                        {
+                                            colIndex = cols.IndexOf(cols.Where(c => c < word.Letters[0].StartBaseLine.X).Max());
+                                            string colName = ColumnNames[colIndex];
+                                            if (!words_byColumn.ContainsKey(colName)) words_byColumn[colName] = new List<Word>();
+                                            words_byColumn[colName].Add(word);
+                                        }
+                                    }
+                                    var columnWords = words_byColumn.ToDictionary(k => k.Key, v => CleanDescription(string.Join(" ", v.Value.Select(w => w.Text))), StringComparer.OrdinalIgnoreCase);
+                                    tableRows.Add((byte)tableRows.Count, JsonConvert.SerializeObject(columnWords, Formatting.None));
+                                    //if (words_byColumn["ITEM"].Where(w => w.Text == "42081").Any()) Debugger.Break();
+                                } // get all the words in a table row once (for column 0)
+                            }
+
+                            if (pgRegion == PageRegion.none & Regex.IsMatch(line, "v(e|é)rification", RegexOptions.IgnoreCase))
+                                pgRegion = PageRegion.contact;
                             else if (pgRegion == PageRegion.contact)
                             {
-                                var contactRegion = regions_byPage[pageNbr][pgRegion];
-                                if (Regex.IsMatch(line, "(customer|client):", RegexOptions.IgnoreCase))
+                                var contactRegion = regions[pgRegion];
+                                string[] left_right = line.Split('■');
+                                if (left_right.Length >= 4)
                                 {
-                                    string[] client_Order = Regex.Split(line.Trim(), "(Customer|Client|Order|Commande):", RegexOptions.IgnoreCase);
-                                    client = client_Order[2].Trim();
-                                    order = client_Order[4].Trim();
-                                    contactRegion.Add(0, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "client", client }, { "order#", order } }));
-                                }
-                                else if (Regex.IsMatch(line, "Contact:"))
-                                {
-                                    string[] contact_Phone = Regex.Split(line.Trim(), "(téléphone|phone):", RegexOptions.IgnoreCase);
-                                    contact = Regex.Match(contact_Phone[0], "(?<=contact:).*", RegexOptions.IgnoreCase).Value.Trim();
-                                    phone = Regex.Match(line, "(?<=phone:).*", RegexOptions.IgnoreCase).Value.Trim();
-                                    contactRegion.Add(1, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "contact", contact }, { "phone#", phone } }));
-                                }
-                                else if (line.Contains("E-Mail:"))
-                                {
-                                    string[] rep_Email = Regex.Split(line.Trim(), "E-Mail:", RegexOptions.IgnoreCase);
-                                    repName = Regex.Replace(rep_Email[0], "flaghouse", string.Empty, RegexOptions.IgnoreCase).Trim();
-                                    repEmail = rep_Email[1].Trim();
-                                    contactRegion.Add(2, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "rep", repName }, { "email", repEmail } }));
+                                    string leftValue = Regex.Replace(left_right[1].Trim(), "[\n\r\t]", string.Empty);
+                                    string rightValue = Regex.Replace(left_right[3].Trim(), "[\n\r\t]", string.Empty);
+                                    if (Regex.IsMatch(line, "(customer|client):", RegexOptions.IgnoreCase))
+                                    {
+                                        itemTable.Name = leftValue;
+                                        client = leftValue;
+                                        order = rightValue;
+                                        contactRegion.Add(0, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "client", client }, { "order#", order } }));
+                                    }
+                                    else if (Regex.IsMatch(line, "Contact:"))
+                                    {
+                                        contact = leftValue;
+                                        phone = rightValue;
+                                        contactRegion.Add(1, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "contact", contact }, { "phone#", phone } }));
+                                    }
+                                    else if (line.ToLowerInvariant().Contains("e-mail:"))
+                                    {
+                                        repName = leftValue;
+                                        repEmail = rightValue;
+                                        contactRegion.Add(2, JsonConvert.SerializeObject(new Dictionary<string, string>() { { "rep", repName }, { "email", repEmail } }));
+                                    }
                                 }
                             }
-                            else if (pgRegion == PageRegion.table_hdr)
-                                pgRegion = PageRegion.table_data;
-
-                            if (!regions_byPage[pageNbr].ContainsKey(pgRegion)) regions_byPage[pageNbr][pgRegion] = new Dictionary<byte, string>();
-
-                            if (pgRegion == PageRegion.table_data)
+                            else if (pgRegion == PageRegion.table_data)
                             {
                                 // [117.5] SIGNATURE ■[336.8] DATE
                                 bool isTableEnd = line.Contains("SIGNATURE") & line.Contains("DATE");
                                 if (line.Contains("NOM IMPRIMÉ") | line.Contains("PRINTED NAME")) isTableEnd = true;
                                 if (line.Contains("VEUILLEZ ENVOYER")) isTableEnd = true;
+                                if (line.Contains("ONCE COMPLETED")) isTableEnd = true;
+                                if (Regex.IsMatch(line, "page [0-9] of [0-9]", RegexOptions.IgnoreCase)) isTableEnd = true;
                                 if (!line.Any()) isTableEnd = true;
-
                                 if (isTableEnd)
                                     pgRegion = PageRegion.footer;
-
-                                else
-                                {
-                                    var tableRegion = regions_byPage[pageNbr][pgRegion];
-                                    tableRegion.Add(lineNbr, line);
-                                }
                             }
                         }
-
-                        var tableRows = regions_byPage[pageNbr][PageRegion.table_data];
-                        var wordLefts = new Dictionary<double, List<Tuple<byte, string>>>();
-                        foreach (var tableRow in tableRows)
-                        {
-                            var xs = Regex.Matches(tableRow.Value, "●[0-9.]{1,}●{1,}");
-                            foreach (Match x in xs)
-                            {
-                                string nbr = x.Value.Replace("●", string.Empty);
-                                double wordLeft = double.Parse(nbr);
-                                if (!wordLefts.ContainsKey(wordLeft)) wordLefts[wordLeft] = new List<Tuple<byte, string>>();
-                                string[] splitRow = tableRow.Value.Split(new string[] { x.Value, "■" }, StringSplitOptions.RemoveEmptyEntries);
-                                wordLefts[wordLeft].AddRange(splitRow.Where(sr => !sr.Contains("●")).Select(sr => Tuple.Create(tableRow.Key, sr.Trim())));
-                            }
-                        }
-                        wordLefts = wordLefts.OrderByDescending(wl => wl.Key).ToDictionary(k => k.Key, v => v.Value);
-                        var columns = new Dictionary<string, List<Tuple<byte, string>>>();
-                        var col3_x = wordLefts.First().Key;
-                        var col2_x = wordLefts.Skip(1).First().Key;
-                        foreach (var row in wordLefts)
-                        {
-                            string colName = row.Key == col3_x ? "3_Qty" : row.Key == col2_x ? "2_Description" : "1_Code";
-                            if (!columns.ContainsKey(colName)) columns.Add(colName, new List<Tuple<byte, string>>());
-                            columns[colName].AddRange(row.Value);
-                        }
-                        var lineNbrs = new List<byte>();
-                        foreach (var col in columns)
-                        {
-                            col.Value.Sort((v1, v2) => v2.Item1.CompareTo(v1.Item1));
-                            lineNbrs.AddRange(col.Value.Select(c => c.Item1));
-                        }
-                        lineNbrs = lineNbrs.Distinct().ToList();
-                        lineNbrs.Sort((l1, l2) => l2.CompareTo(l1));
-                        var items = new Dictionary<byte, Item>();
-                        var rows = columns.ToDictionary(k => k.Key, v => v.Value.OrderBy(c => c.Item1).ToDictionary(x => x.Item1, y => y.Item2));
-                        string col1String = string.Join(Environment.NewLine, columns["1_Code"]);
-                        string col2String = string.Join(Environment.NewLine, columns["2_Description"]);
-                        string col3String = string.Join(Environment.NewLine, columns["3_Qty"]);
-                        Item rollingItem = new Item();
-                        foreach (byte lineNbr in lineNbrs)
-                        {
-                            if (rollingItem.Code == null & rows["1_Code"].ContainsKey(lineNbr))
-                                rollingItem.Code = rows["1_Code"][lineNbr];
-
-                            if (rollingItem.Description == null & rows["2_Description"].ContainsKey(lineNbr))
-                            {
-                                string pad = new string(' ', 8);
-                                string description = rows["2_Description"][lineNbr] + pad;
-                                string newDescription = description;
-                                newDescription = Regex.Replace(newDescription, "\\sTRK\\s", "     ") + pad; // dont know what these are
-                                newDescription = Regex.Replace(newDescription, " N[A-Z][0-9]{2} ", pad) + pad; // NS15 or NF13 etc
-                                while (Regex.IsMatch(newDescription, " ([A-Z])\\1 "))
-                                {
-                                    newDescription = Regex.Replace(newDescription, " ([A-Z])\\1 ", pad) + pad; // AA, BB, etc
-                                }
-                                newDescription = Regex.Replace(newDescription, " {2,}", " ") + pad;
-                                newDescription = newDescription.Trim();
-                                rollingItem.Description = newDescription;
-                            }   
-
-                            if (rollingItem.Qty == 0 & rows["3_Qty"].ContainsKey(lineNbr))
-                                rollingItem.Qty = int.Parse(rows["3_Qty"][lineNbr]);
-
-                            if (rollingItem.Complete)
-                            {
-                                items.Add(lineNbr, rollingItem);
-                                rollingItem = new Item();
-                            }
-                        }
-                        items_byPage[pageNbr] = items;
                     }
+
+                    #region" save .txt file "
                     const byte halfway= 50; // 50 is halfway mark
                     const byte indent = 8; // 50 is halfway mark
                     string rightPad = new string(' ', halfway);
                     string leftPad = new string(' ', indent);
                     var all = new List<string>();
-                    var line1a = $"Client: {client.Trim()}";
-                    var line1b = $"Order: {order.Trim()}";
+                    var line1a = $"Client: {client?.Trim()}";
+                    var line1b = $"Order: {order?.Trim()}";
                     var line1 = (line1a + rightPad).Substring(0, halfway) + (line1b + rightPad).Substring(0, halfway);
                     all.Add((leftPad + line1).Substring(0, halfway * 2));
 
@@ -386,23 +479,33 @@ namespace fhInventoryEditor
                     var line2 = (line2a + rightPad).Substring(0, halfway) + (line2b + rightPad).Substring(0, halfway);
                     all.Add((leftPad + line2).Substring(0, halfway * 2));
 
-                    var line3a = $"Rep: {repName.Trim()}";
-                    var line3b = $"email: {repEmail.Trim()}";
+                    var line3a = $"Rep: {repName?.Trim()}";
+                    var line3b = $"email: {repEmail?.Trim()}";
                     var line3 = (line3a + rightPad).Substring(0, halfway) + (line3b + rightPad).Substring(0, halfway);
                     all.Add((leftPad + line3).Substring(0, halfway * 2));
 
+                    string col1_item = ColumnNames[0];
+                    string col2_desc = ColumnNames[1];
+                    string col3_qty = ColumnNames[2];
                     const byte col1 = 12;
                     const byte col2 = 81;
                     const byte col3 = 3;
                     all.Add("┏" + new string('━', col1) + "┳" + new string('━', col2) + "┳" + new string('━', col3) + "┓");
                     all.Add("┃" + ("Item#" + new string(' ', col1)).Substring(0, col1) + "┃" + ("Desc." + new string(' ', col2)).Substring(0, col2) + "┃Qty┃");
                     all.Add("┣" + new string('━', col1) + "╋" + new string('━', col2) + "╋" + new string('━', col3) + "┫");
-                    foreach (var item in items_byPage[1])
+                    foreach (var item in regions[PageRegion.table_data])
                     {
-                        all.Add("┃" + (item.Value.Code + new string(' ', col1)).Substring(0, col1) + "┃" + (item.Value.Description + new string(' ', col2)).Substring(0, col2) + $"┃" + (item.Value.Qty + new string(' ', col3)).Substring(0, col3) + "┃");
+                        var rowDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(item.Value);
+                        string cell1_item = rowDict[col1_item];
+                        string cell2_desc = rowDict[col2_desc];
+                        string cell3_qty = rowDict.ContainsKey(col3_qty) ? rowDict[col3_qty] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
+                        all.Add("┃" + (cell1_item + new string(' ', col1)).Substring(0, col1) + "┃" + (cell2_desc + new string(' ', col2)).Substring(0, col2) + $"┃" + (cell3_qty + new string(' ', col3)).Substring(0, col3) + "┃");
+                        itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, cell3_qty });
                     }
                     all.Add("┗" + new string('━', col1) + "┻" + new string('━', col2) + "┻" + new string('━', col3) + "┛");
                     string printout = string.Join(Environment.NewLine, all);
+                    string html = itemTable.HTML;
+                    #endregion
                     Debugger.Break();
                 }
             }
@@ -411,7 +514,7 @@ namespace fhInventoryEditor
         {
             public string Code { get; set; }
             public string Description { get; set; }
-            public int Qty { get; set; }
+            public double Qty { get; set; }
             public bool Complete { get { return !(Code == null | Description == null | Qty == 0); } }
             public override string ToString()
             {
