@@ -109,6 +109,23 @@ internal string Client
             newDescription = newDescription.Trim();
             return newDescription;
         }
+        private static Dictionary<bool, List<Word>> Words_inLine(PdfRectangle rectIn, List<Word> words, byte margin = 0)
+        {
+            var xxx = new PdfRectangle(new PdfPoint(0, rectIn.BottomLeft.Y - margin), new PdfPoint(1000, rectIn.TopRight.Y + margin));
+            var wordsInRects = new List<Word>(words.Where(w => w.BoundingBox.IntersectsWith(xxx)));
+            var words_inLine =
+(from ltr in wordsInRects
+ let isAbove = ltr.BoundingBox.Top > xxx.Centroid.Y
+ group ltr by isAbove into lineGroup
+ orderby lineGroup.Key descending
+ select new
+ {
+     above = lineGroup.Key,
+     words = new List<Word>(lineGroup.OrderBy(w => w.BoundingBox.Left))
+ }).ToDictionary(k => k.above, v => v.words);
+            return words_inLine;
+        }
+
         private void Parse_deliveryForm()
         {
             List<FileInfo> deliveries = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories).Where(f => Regex.IsMatch(f.Name.ToLowerInvariant(), "delivery|livraison")));
@@ -192,6 +209,22 @@ internal string Client
                             itemTable.Columns.Add("desc", typeof(string));
                             itemTable.Columns.Add("qty", typeof(double));
                         }
+
+                        var contactWords = new List<Word>(words.Where(w => new string[] { "client:", "contact:", "order:", "phone:", "rep:", "e-mail:" }.Contains(w.Text.ToLower())));
+                        var contactLines = new List<string>();
+                        foreach (var contactWord in contactWords)
+                        {
+                            var words_thisLine = Words_inLine(contactWord.BoundingBox, words, 5);
+                            foreach (var isAbove in words_thisLine)
+                            {
+                                foreach (var word in words_thisLine[isAbove.Key])
+                                {
+                                    contactLines.Add(word.Text);
+                                }
+                            }
+                        }
+                        contactLines = contactLines.Distinct().ToList();
+                        Debugger.Break();
 
                         #region" fonts --> size(w,h) "
                         Dictionary<string, List<Word>> fonts =
@@ -388,22 +421,11 @@ internal string Client
                                 if (colIndex == 0)
                                 {
                                     PdfRectangle letterGlyph = firstLetter_inWord.GlyphRectangle;
-                                    var xxx = new PdfRectangle(new PdfPoint(0, letterGlyph.BottomLeft.Y), new PdfPoint(1000, letterGlyph.TopRight.Y));
-                                    var wordsInRects = new List<Word>(words.Where(w => w.BoundingBox.IntersectsWith(xxx)));
-                                    var letters_thisLine =
-    (from ltr in wordsInRects
-     let isAbove = ltr.BoundingBox.Top > xxx.Centroid.Y
-     group ltr by isAbove into lineGroup
-     orderby lineGroup.Key descending
-     select new
-     {
-         above = lineGroup.Key,
-         words = new List<Word>(lineGroup.OrderBy(w => w.BoundingBox.Left))
-     }).ToDictionary(k => k.above, v => v.words);
+                                    var words_thisLine = Words_inLine(letterGlyph, words);
                                     var words_byColumn = new Dictionary<string, List<Word>>();
-                                    foreach (var isAbove in letters_thisLine)
+                                    foreach (var isAbove in words_thisLine)
                                     {
-                                        foreach (var word in letters_thisLine[isAbove.Key])
+                                        foreach (var word in words_thisLine[isAbove.Key])
                                         {
                                             colIndex = cols.IndexOf(cols.Where(c => c < word.Letters[0].StartBaseLine.X).Max());
                                             string colName = ColumnNames[colIndex];
@@ -413,7 +435,6 @@ internal string Client
                                     }
                                     var columnWords = words_byColumn.ToDictionary(k => k.Key, v => CleanDescription(string.Join(" ", v.Value.Select(w => w.Text))), StringComparer.OrdinalIgnoreCase);
                                     tableRows.Add((byte)tableRows.Count, JsonConvert.SerializeObject(columnWords, Formatting.None));
-                                    //if (words_byColumn["ITEM"].Where(w => w.Text == "42081").Any()) Debugger.Break();
                                 } // get all the words in a table row once (for column 0)
                             }
 
@@ -474,8 +495,8 @@ internal string Client
                     var line1 = (line1a + rightPad).Substring(0, halfway) + (line1b + rightPad).Substring(0, halfway);
                     all.Add((leftPad + line1).Substring(0, halfway * 2));
 
-                    var line2a = $"Contact: {contact.Trim()}";
-                    var line2b = $"Phone: {phone.Trim()}";
+                    var line2a = $"Contact: {contact?.Trim()}";
+                    var line2b = $"Phone: {phone?.Trim()}";
                     var line2 = (line2a + rightPad).Substring(0, halfway) + (line2b + rightPad).Substring(0, halfway);
                     all.Add((leftPad + line2).Substring(0, halfway * 2));
 
