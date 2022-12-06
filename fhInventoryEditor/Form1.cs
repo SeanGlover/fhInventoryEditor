@@ -15,10 +15,10 @@ using System.Drawing;
 using UglyToad.PdfPig.Core;
 using UglyToad.PdfPig.Geometry;
 using DataTableAsync;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using System.Net.Mail;
 using System.Net;
 using System.Xml.Linq;
+using System.Runtime.InteropServices.WindowsRuntime;
 
 namespace fhInventoryEditor
 {
@@ -29,105 +29,38 @@ namespace fhInventoryEditor
             InitializeComponent();
         }
         private static readonly DirectoryInfo jobsFolder = new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\");
+        private static readonly DirectoryInfo samplesFolder = new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\z_samples\\");
         private static readonly string accountName = "Centre Beaubien"; // CentreLeCap, Centre Beaubien
         private static readonly DirectoryInfo jobInfo = new DirectoryInfo($"{jobsFolder.FullName}{accountName}\\");
         private static readonly string htmlPath = $"{jobInfo.FullName}a_jobSummary\\index.html";
         private readonly HtmlDocument htmlEditor = new HtmlDocument();
 
         public enum PageRegion { none, contact, table_disclaimer, table_hdr, table_data, footer }
-        internal bool FormIsFrench { get; private set; }
-        internal bool FormIsDelivery { get; private set; }
-        internal List<string> ColumnNames { get; private set; }
-        private readonly Table contactTable = new Table();
-        private readonly Table itemTable = new Table();
-        private readonly Dictionary<PageRegion, Dictionary<byte, string>> regions = new Dictionary<PageRegion, Dictionary<byte, string>>
+        public enum DocumentType { none, quote, delivery, invoice }
+        public enum DocumentLanguage { none, english, french }
+        public struct Document
         {
-            [PageRegion.contact] = new Dictionary<byte, string>(),
-            [PageRegion.table_hdr] = new Dictionary<byte, string> { [0] = string.Empty },
-            [PageRegion.table_data] = new Dictionary<byte, string>()
-        };
-
-#region" contact info "
-internal string Client
-        {
-            get { return client; }
-            private set { } }
-        private string client;
-        internal string Order
-        {
-            get { return order; }
-            private set { }
+            public DocumentType type;
+            public DocumentLanguage language;
+            public override string ToString() => $"{type} [{language}]";
         }
-        private string order;
-        internal string Contact
-        {
-            get { return contact; }
-            private set { }
-        }
-        private string contact;
-        internal string Phone
-        {
-            get { return phone; }
-            private set { }
-        }
-        private string phone;
-        internal string RepName
-        {
-            get { return repName; }
-            private set { }
-        }
-        private string repName;
-        internal string RepEmail
-        {
-            get { return repEmail; }
-            private set { }
-        }
-        private string repEmail;
-        #endregion
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            var item = itemTable.Columns.Add("item", typeof(string));
-            var desc = itemTable.Columns.Add("desc", typeof(string));
-            var qty = itemTable.Columns.Add("qty", typeof(double));
-            itemTable.PrimaryKeys = new Table.Column[] { item };
+            //var type = Get_documentTypeLanguage(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\delivery_Centre Evasion [1].pdf"));
+            //Debugger.Break();
+            //Get_samples();
+            //Debugger.Break();
+            //SaveAll_byFiletype();
 
-            var leftKey = contactTable.Columns.Add("leftKey", typeof(string));
-            var leftValue = contactTable.Columns.Add("leftValue", typeof(string));
-            var rightKey = contactTable.Columns.Add("rightKey", typeof(string));
-            var rightValue = contactTable.Columns.Add("rightValue", typeof(string));
-            contactTable.PrimaryKeys = new Table.Column[] { leftKey };
-
-            List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
-            List<FileInfo> allDeliveries = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories).Where(f => Regex.IsMatch(f.Name.ToLowerInvariant(), "delivery|livraison")));
-            allDeliveries.Sort((f1, f2) => { return string.Compare(f1.Name, f2.Name); });
-            List<FileInfo> jobDelivery = new List<FileInfo>(jobInfo.EnumerateFiles("*.pdf").Where(f => Regex.IsMatch(f.Name.ToLowerInvariant(), "delivery|livraison")));
-            #region" delivery examples "
-            const bool byIndex = true;
-            const byte deliveryIndex = 1;
-            const string cadens = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Cadens%20Lighthouse/NS0PP5662%20Caden's%20Lighthouse%20-%20Delivery%20Verification%20Form.pdf";
-            const string leCap = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/CentreLeCap/APOPP6975%20Delivery%20Checklist.pdf";
-            const string jLeger = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/JulesLeger/CENTRE%20JULES%20LEGER%20-%20DELIVERY%20CHECKLIST%20-%20PROJECT%20NSOPP6557.pdf";
-            const string bbienA = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Centre%20Beaubien/NSOPP6331%20FORMULAIRE%20DE%20V%C3%89RIFICATION%20DE%20LIVRAISON.pdf";
-            const string evasion = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Centre%20Evasion/CENTRE%20%C3%89VASION_delivery.pdf";
-            const string yQuote = "file:///C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Yaldei/NSOPP5357%20-%20YALDEI%20CENTER%20-%20SNOEZELEN%20MULTI-SENSORY%20ROOM%20-%20QUOTE%20P0810161%20revised.pdf";
-            string tabURL = System.Web.HttpUtility.UrlDecode(yQuote);
-            FileInfo deliveryForm = byIndex ? allDeliveries[deliveryIndex] : new FileInfo(tabURL.Replace("file:///", string.Empty));
-            /// 0=cadens            NO "consists of:" wrapping... might be better to go for each line
-            /// 1=cdbc restigouche  100%
-            /// 2=beaubien (a)      100%
-            /// 3=beaubien (b)      100%
-            /// 4=leCap             NO wrap
-            /// 5=julesLeger        NO wrap
-            /// 6=onyva-hawkesbury  100%
-            /// 7=onyva-rockland    100%
-            /// 8=angelica          100%
-            /// 9=yaldei            
-            #endregion
-            foreach (FileInfo delivery in allFiles.Skip(0).Take(1000))
+            var tableFiles = new List<FileInfo>(samplesFolder.EnumerateFiles("*.pdf", SearchOption.TopDirectoryOnly));
+            var dlvryFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("delivery")));
+            var quoteFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("quote")));
+            var tables = new Dictionary<string, string>();
+            foreach (var dlvryFile in dlvryFiles)
             {
-                Parse_deliveryForm(delivery);
-                //Debugger.Break();
+                var xx = Parse_form(dlvryFile);
+                tables.Add(dlvryFile.Name, xx.Item1.HTML);
             }
             Debugger.Break();
 
@@ -138,6 +71,131 @@ internal string Client
             //{
             //    htmlEditor.Save(sw);
             //}
+        }
+        private static void Get_samples()
+        {
+            var samples = Get_DocumentTypes();
+            samples.Remove(DocumentType.none);
+            foreach (var sampleType in samples)
+                foreach (var pdf in sampleType.Value)
+                    File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
+        }
+        private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes()
+        {
+            List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
+            var doctypes = new Dictionary<DocumentType, List<FileInfo>>();
+            foreach (var pdf in allFiles)
+            {
+                var pdfDocument = Get_documentTypeLanguage(pdf);
+                if (!doctypes.ContainsKey(pdfDocument.type)) doctypes[pdfDocument.type] = new List<FileInfo>();
+                doctypes[pdfDocument.type].Add(pdf);
+            }
+            return doctypes;
+        }
+        private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(FileInfo jobinfo)
+        {
+            List<FileInfo> jobFiles = new List<FileInfo>(jobinfo.Directory.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
+            var doctypes = new Dictionary<DocumentType, List<FileInfo>>();
+            foreach (var pdf in jobFiles)
+            {
+                var pdfDocument = Get_documentTypeLanguage(pdf);
+                if (!doctypes.ContainsKey(pdfDocument.type)) doctypes[pdfDocument.type] = new List<FileInfo>();
+                doctypes[pdfDocument.type].Add(pdf);
+            }
+            return doctypes;
+        }
+        private static void SaveAll_byFiletype()
+        {
+            List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
+            foreach (var pdf in allFiles)
+                SaveAll_byFiletype(pdf);
+        }
+        private static void SaveAll_byFiletype(FileInfo jobinfo)
+        {
+            // 1] group pdf into DocumentType, then move each file indexing if more than 1 quote or delivery document in a job folder
+            var pdfTypes = Get_DocumentTypes(jobinfo);
+            if (pdfTypes.ContainsKey(DocumentType.none)) pdfTypes.Remove(DocumentType.none);
+
+            var moves = new List<Tuple<string, string>>();
+            foreach (var pdfType in pdfTypes)
+            {
+                byte fileIndex = 0;
+                foreach (var pdf in pdfType.Value)
+                {
+                    string oldPath = pdf.FullName;
+                    string guidName = Guid.NewGuid().ToString();
+                    string guidPath = $"{pdf.Directory.FullName}" + '\\' + guidName + ".pdf";
+                    File.Move(oldPath, guidPath);
+                    string newPath = string.Empty;
+                    string[] splitLevels = guidPath.Split('\\');
+                    byte lvlIndex = 0;
+                    string lvlLast = string.Empty;
+                    foreach (string lvl in splitLevels)
+                    {
+                        newPath += lvl + '\\';
+                        if (lvlLast != lvl)
+                        {
+                            if (lvlLast.ToLowerInvariant() == "jobs")
+                            {
+                                if (pdfType.Value.Count == 1) newPath += $"{pdfType.Key}_{lvl}.pdf";
+                                else newPath += $"{pdfType.Key}_{lvl} [{fileIndex}].pdf";
+                                break;
+                            }
+                            lvlLast = lvl;
+                        }
+                        lvlIndex++;
+                    }
+                    fileIndex++;
+                    if (guidPath != newPath) moves.Add(Tuple.Create(guidPath, newPath));
+                }
+            }
+            foreach (var move in moves)
+                File.Move(move.Item1, move.Item2);
+        }
+        private static Document Get_documentTypeLanguage(FileInfo pdfinfo)
+        {
+            string[] keyDeliveryWords = new string[]
+            {
+                "Formulaire de vérification de livraison",
+                "Les commandes doivent être inspectées pour dommages d'expédition",
+                "Shipping damage claims will only be accepted by",
+                "Delivery Verification Form"
+            };
+            var documentPages = Get_pdfText(pdfinfo);
+            if (documentPages == null) return new Document() { language = DocumentLanguage.none, type = DocumentType.none };
+            var documentText = string.Join(Environment.NewLine, documentPages.Values);
+            
+            // quote match MUST be first as the quote contains the delivery disclaimer statement, but delivery forms DON'T have QUOTE#/SOUMISSION
+            var quoteMatch = Regex.Match(documentText, "(QUOTE|SOUMISSION) {0,}#:", RegexOptions.IgnoreCase);
+            if (quoteMatch.Success)
+            {
+                var quoteLanguage = Regex.IsMatch(quoteMatch.Value, "SOUMISSION {0,1}#:") ? DocumentLanguage.french : DocumentLanguage.english;
+                return new Document() { language = quoteLanguage, type = DocumentType.quote };
+            }
+            
+            var dlvryMatch = Regex.Match(documentText, $"({string.Join("|", keyDeliveryWords)})", RegexOptions.IgnoreCase);
+            if (dlvryMatch.Success)
+            {
+                var deliveryLanguage = Regex.IsMatch(dlvryMatch.Value, $"({string.Join("|", keyDeliveryWords.Take(2))})") ? DocumentLanguage.french : DocumentLanguage.english;
+                return new Document() { language = deliveryLanguage, type = DocumentType.delivery };
+            }
+
+            var noneLanguage = Regex.IsMatch(documentText, "[àâçéèêëîïôûùüÿñæœ]", RegexOptions.IgnoreCase) ? DocumentLanguage.french : DocumentLanguage.english;
+            return new Document() { language = noneLanguage, type = DocumentType.none };
+        }
+        private static Dictionary<int, string> Get_pdfText(FileInfo pdfinfo)
+        {
+            if (pdfinfo == null || !File.Exists(pdfinfo.FullName)) { return null; }
+            try
+            {
+                Dictionary<int, string> pages = new Dictionary<int, string>();
+                using (PdfDocument document = PdfDocument.Open(pdfinfo.FullName))
+                {
+                    foreach (var page in document.GetPages()) pages[page.Number] = page.Text;
+                }
+                return pages;
+            }
+            catch { return null; }
         }
         private static string CleanDescription(string descriptionIn)
         {
@@ -170,20 +228,49 @@ internal string Client
  }).ToDictionary(k => k.above, v => v.words);
             return words_inLine;
         }
-
-        private void Parse_deliveryForm(FileInfo jobinfo, bool openFile = false)
+        private static void Parse_all()
         {
-            if (jobinfo != null)
+            var allTypes = Get_DocumentTypes();
+            foreach (var pdfType in allTypes)
+                foreach (var pdf in pdfType.Value) Parse_form(pdf);
+            Debugger.Break();
+        }
+        private static Tuple<Table, Document> Parse_form(FileInfo jobinfo, bool openFile = false)
+        {
+            if (jobinfo == null) return Tuple.Create(new Table(), new Document());
+            else
             {
                 if (openFile) Process.Start($"{jobinfo.FullName}");
-
                 const byte pageWidth = 112;
                 string emptyLine = new string(' ', pageWidth);
-                regions[PageRegion.table_data].Clear();
-                itemTable.Rows.Clear();
-                contactTable.Rows.Clear();
+
+                var ColumnNames = new List<string>();
+
+                Table itemTable = new Table();
+                var item = itemTable.Columns.Add("item", typeof(string));
+                var desc = itemTable.Columns.Add("desc", typeof(string));
+                var qty = itemTable.Columns.Add("qty", typeof(double));
+                itemTable.PrimaryKeys = new Table.Column[] { item };
+
+                Table contactTable = new Table();
+                var leftKey = contactTable.Columns.Add("leftKey", typeof(string));
+                var leftValue = contactTable.Columns.Add("leftValue", typeof(string));
+                var rightKey = contactTable.Columns.Add("rightKey", typeof(string));
+                var rightValue = contactTable.Columns.Add("rightValue", typeof(string));
+                contactTable.PrimaryKeys = new Table.Column[] { leftKey };
+
+                string client = null;
+                string order = null;
+                string contact = null;
+                string phone = null;
+                string repName = null;
+                string repEmail = null;
+
+                var tableRows = new Dictionary<byte, string>();
+
                 try
                 {
+                    var documentTypeLanguage = Get_documentTypeLanguage(jobinfo);
                     using (PdfDocument document = PdfDocument.Open(jobinfo.FullName))
                     {
                         var fonts_byPage = new Dictionary<byte, Dictionary<string, List<Word>>>();
@@ -216,7 +303,7 @@ internal string Client
                                     }
                                 }
                             });
-                        
+
                             List<Word> words = new List<Word>(page.GetWords());
                             words.Sort((w1, w2) =>
                             {
@@ -235,8 +322,6 @@ internal string Client
                             byte pageNbr = Convert.ToByte(page.Number);
                             if (pageNbr == 1)
                             {
-                                FormIsFrench = pageText.ToLowerInvariant().Contains("vérification");
-                                FormIsDelivery = FormIsFrench ? pageText.ToLowerInvariant().Contains("livraison") : pageText.ToLowerInvariant().Contains("delivery");
                                 var widthDictionary = new Dictionary<double, List<PdfRectangle>>();
                                 var pdfRects_exceptText = new List<PdfRectangle>();
                                 var pdfRects_Lines = new List<PdfRectangle>();
@@ -342,7 +427,7 @@ internal string Client
 
                                 double tableDataTop = tableColumnLefts[1].Top; // column[0] line may extend all the way to the top of the document so use 1 which should stop at the table top
                                 var wordsAboveTable = new List<Word>(words.Where(w => w.BoundingBox.Bottom > tableDataTop));
-                                if (FormIsDelivery)
+                                if (documentTypeLanguage.type == DocumentType.delivery)
                                 {
                                     double VERIFICATION = new List<Word>(wordsAboveTable.Where(w => Regex.IsMatch(w.Text, "v(e|é)rification", RegexOptions.IgnoreCase))).FirstOrDefault().BoundingBox.Bottom;
                                     double PLEASENOTE = new List<Word>(wordsAboveTable.Where(w => Regex.IsMatch(w.Text, "NOTE(R){0,1}:"))).FirstOrDefault().BoundingBox.Top;
@@ -384,7 +469,7 @@ internal string Client
                                         }
                                     }
                                 }
-                                else
+                                if (documentTypeLanguage.type == DocumentType.quote)
                                 {
                                     //Debugger.Break();
                                 }
@@ -396,10 +481,8 @@ internal string Client
                                     var allColumnNames = new List<Word>(words.Where(w => w.BoundingBox.Bottom == itemNbr.BoundingBox.Bottom));
                                     ColumnNames = new List<string>(allColumnNames.Where(c => c.Text != "#").Select(c => c.Text));
 
-
                                     colNames = words.Where(w => ColumnNames.Contains(w.Text.Trim())).ToDictionary(k => k.Text, v => v);
                                     colRects = colNames.ToDictionary(k => k.Key, v => v.Value.BoundingBox);
-                                    regions[PageRegion.table_hdr][0] = string.Join(" ", colNames.Keys);
                                     tableWords.AddRange(words.Where(w => w.BoundingBox.Top < itemNbr.BoundingBox.Bottom));
                                 }
                                 #endregion
@@ -469,7 +552,6 @@ internal string Client
 
                             var lines_thisPage = new Dictionary<double, string>();
                             var lines = new List<string>();
-                            var tableRows = regions[PageRegion.table_data];
                             consecutiveLetters_byPage[pageNbr] = new Dictionary<byte, Dictionary<byte, Dictionary<int, Letter>>>();
 
                             foreach (byte lineNbr in letters_thisPage.Keys)
@@ -616,7 +698,7 @@ internal string Client
                         }
 
                         #region" save .txt file "
-                        const byte halfway= 50; // 50 is halfway mark
+                        const byte halfway = 50; // 50 is halfway mark
                         const byte indent = 8; // 50 is halfway mark
                         string rightPad = new string(' ', halfway);
                         string leftPad = new string(' ', indent);
@@ -645,9 +727,9 @@ internal string Client
                         all.Add("┏" + new string('━', col1) + "┳" + new string('━', col2) + "┳" + new string('━', col3) + "┓");
                         all.Add("┃" + ("Item#" + new string(' ', col1)).Substring(0, col1) + "┃" + ("Desc." + new string(' ', col2)).Substring(0, col2) + "┃Qty┃");
                         all.Add("┣" + new string('━', col1) + "╋" + new string('━', col2) + "╋" + new string('━', col3) + "┫");
-                        foreach (var item in regions[PageRegion.table_data])
+                        foreach (var tableRow in tableRows)
                         {
-                            var rowDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(item.Value);
+                            var rowDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(tableRow.Value);
                             string cell1_item = rowDict[ColumnNames[0]];
                             string cell2_desc = rowDict[ColumnNames[1]];
                             string cell3_qty = rowDict.ContainsKey(ColumnNames[2]) ? rowDict[ColumnNames[2]] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
@@ -660,29 +742,15 @@ internal string Client
                         string htmlData = itemTable.HTML;
                         string html = string.Join(Environment.NewLine, new string[] { htmlContact, htmlData });
                         itemTable.Name = string.Join("■", new string[] { client, order, contact, phone, repName, repEmail });
-                        string legalOrder = Regex.Replace(order ?? string.Empty, "[\\\\/:\"*?<>|]+", "^");
-                        string newFilePath = $"{jobinfo.Directory.FullName}\\{jobinfo.Directory.Name}_deliveryList[{legalOrder}].txt";
+                        
+                        // assumes pdf filename is the correct format
+                        string newFilePath = jobinfo.FullName.Replace(".pdf", ".txt");
                         File.WriteAllText(newFilePath, JsonConvert.SerializeObject(itemTable, Formatting.Indented));
-                        File.Move(jobinfo.FullName, newFilePath.Replace(".txt", ".pdf"));
                         #endregion
                     }
+                    return Tuple.Create(itemTable, documentTypeLanguage);
                 }
-                catch { }
-            }
-        }
-        private void Open_quotes(FileInfo jobinfo)
-        {
-            using (PdfDocument document = PdfDocument.Open(jobinfo.FullName))
-            {
-                foreach (Page page in document.GetPages())
-                {
-                    string pageText = page.Text;
-                    if (Regex.IsMatch(pageText, "(QUOTE|SOUMISSION) {0,}#:", RegexOptions.IgnoreCase))
-                    {
-                        Process.Start($"{jobinfo.FullName}");
-                        break;
-                    }
-                }
+                catch (Exception e){ Debugger.Break(); return Tuple.Create(itemTable, new Document()); }
             }
         }
         private void Send_gmail()
