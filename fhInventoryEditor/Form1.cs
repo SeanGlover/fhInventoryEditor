@@ -56,24 +56,32 @@ namespace fhInventoryEditor
             //var yy = Parse_form(new FileInfo(exIsQuote ? exQuote : exDlvry));
             //Debugger.Break();
 
-            var tableFiles = new List<FileInfo>(samplesFolder.EnumerateFiles("*.pdf", SearchOption.TopDirectoryOnly));
-            var dlvryFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("delivery")));
-            var quoteFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("quote")));
             var tables = new Dictionary<string, string>();
-            foreach (var dlvryFile in dlvryFiles.Take(100))
+            var jobs = new List<DirectoryInfo>(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\").EnumerateDirectories());
+            jobs = new List<DirectoryInfo>(jobs.Where(d => !(d.Name.StartsWith("z_") | d.Name.StartsWith("a)"))));
+            foreach (var job in jobs)
             {
-                var xx = Parse_form(dlvryFile, false);
-                tables.Add(dlvryFile.Name, xx.Item1.HTML);
-            }
-            // failed on C:\Users\SeanGlover\Desktop\Personal\FH\Jobs\z_samples\quote_Ste-Therese [2].pdf
-            foreach (var quoteFile in quoteFiles)
-            {
-                try
+                var tableFiles = new List<FileInfo>(job.EnumerateFiles("*.pdf", SearchOption.TopDirectoryOnly));
+                var dlvryFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("delivery")));
+                var quoteFiles = new List<FileInfo>(tableFiles.Where(f => f.Name.StartsWith("quote")));
+                foreach (var dlvryFile in dlvryFiles.Take(100))
                 {
-                    var xx = Parse_form(quoteFile, false);
-                    tables.Add(quoteFile.Name, xx.Item1.HTML);
+                    try
+                    {
+                        var xx = Parse_form(dlvryFile, false);
+                        tables.Add(dlvryFile.Name, xx.Item1.HTML);
+                    }
+                    catch { }
                 }
-                catch { }
+                foreach (var quoteFile in quoteFiles)
+                {
+                    try
+                    {
+                        var xx = Parse_form(quoteFile, false);
+                        tables.Add(quoteFile.Name, xx.Item1.HTML);
+                    }
+                    catch { Debugger.Break(); }
+                }
             }
             Debugger.Break();
 
@@ -363,12 +371,12 @@ namespace fhInventoryEditor
                                 }
                                 if (!(foundWordRect | foundLetterRect)) pdfRects_exceptText.Add(r1);
                                 if (!(foundWordInRect | foundLetterInRect)) pdfRects_Lines.Add(r1);
-                                if (r1.Height > 0 & r1.Height < 2) pdfRects_linesHorizontal.Add(r1);
-                                if (r1.Width > 0 & r1.Width < 2)
+                                if (r1.Height >= 0 & r1.Height < 2) pdfRects_linesHorizontal.Add(r1);
+                                if (r1.Width >= 0 & r1.Width < 2)
                                 {
                                     pdfRects_linesVertical.Add(r1);
                                     if (thinnestVerticalLine > r1.Width) thinnestVerticalLine = r1.Width;
-                                }
+                                } // MUST BE > AND = 0! some lines come through with 0 width
                             }
                             thinnestVerticalLine = Math.Round(thinnestVerticalLine, 2);
                             pdfRects_linesHorizontal.Sort((l1, l2) =>
