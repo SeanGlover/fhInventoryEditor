@@ -16,6 +16,8 @@ using UglyToad.PdfPig.Geometry;
 using DataTableAsync;
 using System.Net;
 using System.Net.Mail;
+using System.Runtime.Remoting.Messaging;
+using System.Xml.Linq;
 
 namespace fhInventoryEditor
 {
@@ -44,11 +46,19 @@ namespace fhInventoryEditor
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            //var type = Get_documentTypeLanguage(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\delivery_Centre Evasion [1].pdf"));
+            //SaveAll_byFiletype(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\delivery_Centre Evasion [1].pdf"));
+            //Debugger.Break();
+            //var type = Get_documentTypeLanguage();
             //Debugger.Break();
             //Get_samples();
             //Debugger.Break();
+
+            DateTime startTime = DateTime.Now;
             //SaveAll_byFiletype();
+            var doctypes = Get_DocumentTypes();
+            DateTime endTime = DateTime.Now;
+            TimeSpan elapsed = endTime - startTime;
+            Debugger.Break();
 
             //const string exDlvry = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Cadens Lighthouse\\delivery_Cadens Lighthouse.pdf";
             //const string exQuote = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\quote_Centre Evasion.pdf";
@@ -103,19 +113,19 @@ namespace fhInventoryEditor
         }
         private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes()
         {
-            List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
             var doctypes = new Dictionary<DocumentType, List<FileInfo>>();
-            foreach (var pdf in allFiles)
+            foreach (var doctype in Enum.GetNames(typeof(DocumentType)))
+                doctypes[(DocumentType)Enum.Parse(typeof(DocumentType), doctype)] = new List<FileInfo>();
+            foreach (var jobFolder in jobsFolder.EnumerateDirectories().Where(d => !(d.Name.StartsWith("a)") | d.Name.StartsWith("z_"))))
             {
-                var pdfDocument = Get_documentTypeLanguage(pdf);
-                if (!doctypes.ContainsKey(pdfDocument.type)) doctypes[pdfDocument.type] = new List<FileInfo>();
-                doctypes[pdfDocument.type].Add(pdf);
+                foreach (var doctypeList in Get_DocumentTypes(jobFolder))
+                    doctypes[doctypeList.Key].AddRange(doctypeList.Value);
             }
             return doctypes;
         }
-        private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(FileInfo jobinfo)
+        internal static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(DirectoryInfo jobfolder)
         {
-            List<FileInfo> jobFiles = new List<FileInfo>(jobinfo.Directory.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
+            List<FileInfo> jobFiles = new List<FileInfo>(jobfolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
             var doctypes = new Dictionary<DocumentType, List<FileInfo>>();
             foreach (var pdf in jobFiles)
             {
@@ -125,6 +135,7 @@ namespace fhInventoryEditor
             }
             return doctypes;
         }
+        private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(FileInfo jobinfo) => Get_DocumentTypes(jobinfo.Directory);
         private static void SaveAll_byFiletype()
         {
             List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
@@ -136,7 +147,7 @@ namespace fhInventoryEditor
             // 1] group pdf into DocumentType, then move each file indexing if more than 1 quote or delivery document in a job folder
             var pdfTypes = Get_DocumentTypes(jobinfo);
             if (pdfTypes.ContainsKey(DocumentType.none)) pdfTypes.Remove(DocumentType.none);
-
+            Debugger.Break();
             var moves = new List<Tuple<string, string>>();
             foreach (var pdfType in pdfTypes)
             {
