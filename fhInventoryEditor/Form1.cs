@@ -18,6 +18,7 @@ using System.Net;
 using System.Net.Mail;
 using System.Runtime.Remoting.Messaging;
 using System.Xml.Linq;
+using System.Diagnostics.Contracts;
 
 namespace fhInventoryEditor
 {
@@ -46,18 +47,39 @@ namespace fhInventoryEditor
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            //SaveAll_byFiletype(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\delivery_Centre Evasion [1].pdf"));
-            //Debugger.Break();
+            /// objective: go into any folder and extract contact details (po#, client name address, etc) + list of products
+            /// 
+            /// SaveAll_byType()
+            ///     1] uses Get_DocumentTypes() to determine the document type and language, but does not parse it
+            ///     2] determines how the file should be named and saves if it doesn't use the set naming convention
+            ///     3] returns a dictionary<string, string> where:
+            ///         a) the key is the existing file name, correct or incorrect convention
+            ///         b) the value is only populated with the correct convention if the old name didn't follow the convention 
+            /// Get_DocumentTypes()
+            ///     1] opens the pdf file and determines the document type and language, but does not parse it
+            ///     2] groups pdf files, by folder- or all folders into a dictionary<DocumentType, List<FileInfo>>
+
             //var type = Get_documentTypeLanguage();
             //Debugger.Break();
             //Get_samples();
             //Debugger.Break();
+            // new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\")
 
             DateTime startTime = DateTime.Now;
-            //SaveAll_byFiletype();
-            var doctypes = Get_DocumentTypes();
+            var forms = Parse_forms();
+            string contacts = string.Join(Environment.NewLine, forms.Item2.Keys);
+            string html = forms.Item1.HTML;
+            //var moves = SaveAll_byType("Centre Evasion");
             DateTime endTime = DateTime.Now;
             TimeSpan elapsed = endTime - startTime;
+            Debugger.Break();
+
+            startTime = DateTime.Now;
+            //SaveAll_byType();
+            //var doctypes = Get_DocumentTypes("Centre Evasion");
+            //var form = Parse_form(new FileInfo(moves.Skip(2).First().Key));
+            endTime = DateTime.Now;
+            elapsed = endTime - startTime;
             Debugger.Break();
 
             //const string exDlvry = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Cadens Lighthouse\\delivery_Cadens Lighthouse.pdf";
@@ -111,6 +133,28 @@ namespace fhInventoryEditor
                 foreach (var pdf in sampleType.Value)
                     File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
         }
+        private static DirectoryInfo Get_directoryByName(string foldername_Or_Filename)
+        {
+            if (foldername_Or_Filename == null) return null;
+            var matchedDirectories = new List<DirectoryInfo>();
+            if (foldername_Or_Filename.EndsWith(".txt") | foldername_Or_Filename.EndsWith(".pdf"))
+            {
+                string filetype = foldername_Or_Filename.Split('.').Last();
+                var allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles($"*.{filetype}", SearchOption.AllDirectories));
+                foreach (var file in allFiles) if (file.Name == foldername_Or_Filename) matchedDirectories.Add(file.Directory);
+            }
+            else
+                matchedDirectories.AddRange(jobsFolder.EnumerateDirectories().Where(d => d.Name == foldername_Or_Filename));
+
+            if (matchedDirectories.Any())
+                return matchedDirectories.First();
+            return null;
+        }
+        internal static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(string foldername_Or_Filename)
+        {
+            DirectoryInfo directory = Get_directoryByName(foldername_Or_Filename);
+            return directory == null ? null : Get_DocumentTypes(directory);
+        }
         private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes()
         {
             var doctypes = new Dictionary<DocumentType, List<FileInfo>>();
@@ -136,30 +180,30 @@ namespace fhInventoryEditor
             return doctypes;
         }
         private static Dictionary<DocumentType, List<FileInfo>> Get_DocumentTypes(FileInfo jobinfo) => Get_DocumentTypes(jobinfo.Directory);
-        private static void SaveAll_byFiletype()
+        internal static Dictionary<string, string> SaveAll_byType()
         {
-            List<FileInfo> allFiles = new List<FileInfo>(jobsFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
-            foreach (var pdf in allFiles)
-                SaveAll_byFiletype(pdf);
+            var allMoves = new Dictionary<string, string>();
+            var allFolders = new List<DirectoryInfo>(jobsFolder.EnumerateDirectories());
+            foreach (var folder in allFolders)
+                foreach (var filePair in SaveAll_byType(folder))
+                    allMoves.Add(filePair.Key, filePair.Value);
+            return allMoves;
         }
-        private static void SaveAll_byFiletype(FileInfo jobinfo)
+        internal static Dictionary<string, string> SaveAll_byType(string foldername_Or_Filename) => SaveAll_byType(Get_directoryByName(foldername_Or_Filename));
+        private static Dictionary<string, string> SaveAll_byType(DirectoryInfo jobFolder) => SaveAll_byDocType(Get_DocumentTypes(jobFolder));
+        internal static Dictionary<string, string> SaveAll_byType(FileInfo jobinfo) => SaveAll_byDocType(Get_DocumentTypes(jobinfo));
+        private static Dictionary<string, string> SaveAll_byDocType(Dictionary<DocumentType, List<FileInfo>> pdfTypes)
         {
-            // 1] group pdf into DocumentType, then move each file indexing if more than 1 quote or delivery document in a job folder
-            var pdfTypes = Get_DocumentTypes(jobinfo);
             if (pdfTypes.ContainsKey(DocumentType.none)) pdfTypes.Remove(DocumentType.none);
-            Debugger.Break();
-            var moves = new List<Tuple<string, string>>();
+            var moves = new Dictionary<string, string>();
             foreach (var pdfType in pdfTypes)
             {
                 byte fileIndex = 0;
                 foreach (var pdf in pdfType.Value)
                 {
                     string oldPath = pdf.FullName;
-                    string guidName = Guid.NewGuid().ToString();
-                    string guidPath = $"{pdf.Directory.FullName}" + '\\' + guidName + ".pdf";
-                    File.Move(oldPath, guidPath);
                     string newPath = string.Empty;
-                    string[] splitLevels = guidPath.Split('\\');
+                    string[] splitLevels = oldPath.Split('\\');
                     byte lvlIndex = 0;
                     string lvlLast = string.Empty;
                     foreach (string lvl in splitLevels)
@@ -178,11 +222,17 @@ namespace fhInventoryEditor
                         lvlIndex++;
                     }
                     fileIndex++;
-                    if (guidPath != newPath) moves.Add(Tuple.Create(guidPath, newPath));
+                    moves.Add(oldPath, string.Empty);
+                    if (newPath != oldPath)
+                    {
+                        string guidPath = $"{pdf.Directory.FullName}" + '\\' + Guid.NewGuid().ToString() + ".pdf";
+                        File.Move(oldPath, guidPath);
+                        File.Move(guidPath, newPath);
+                        moves[oldPath] = newPath;
+                    }
                 }
             }
-            foreach (var move in moves)
-                File.Move(move.Item1, move.Item2);
+            return moves;
         }
         private static Document Get_documentTypeLanguage(FileInfo pdfinfo)
         {
@@ -222,9 +272,8 @@ namespace fhInventoryEditor
             {
                 Dictionary<int, string> pages = new Dictionary<int, string>();
                 using (PdfDocument document = PdfDocument.Open(pdfinfo.FullName))
-                {
-                    foreach (var page in document.GetPages()) pages[page.Number] = page.Text;
-                }
+                    foreach (var page in document.GetPages())
+                        pages[page.Number] = page.Text;
                 return pages;
             }
             catch { return null; }
@@ -237,9 +286,7 @@ namespace fhInventoryEditor
             newDescription = Regex.Replace(newDescription, "\\sTRK\\s", "     ") + pad; // dont know what these are
             newDescription = Regex.Replace(newDescription, " N[A-Z][0-9]{2} ", pad) + pad; // NS15 or NF13 etc
             while (Regex.IsMatch(newDescription, " ([A-Z])\\1 "))
-            {
                 newDescription = Regex.Replace(newDescription, " ([A-Z])\\1 ", pad) + pad; // AA, BB, etc
-            }
             newDescription = Regex.Replace(newDescription, " {2,}", " ") + pad;
             newDescription = newDescription.Trim();
             return newDescription;
@@ -248,24 +295,48 @@ namespace fhInventoryEditor
         {
             var xxx = new PdfRectangle(new PdfPoint(0, rectIn.BottomLeft.Y - margin), new PdfPoint(1000, rectIn.TopRight.Y + margin));
             var wordsInRects = new List<Word>(words.Where(w => w.BoundingBox.IntersectsWith(xxx)));
-            var words_inLine =
-(from ltr in wordsInRects
- let isAbove = ltr.BoundingBox.Top > xxx.Centroid.Y
- group ltr by isAbove into lineGroup
- orderby lineGroup.Key descending
- select new
- {
-     above = lineGroup.Key,
-     words = new List<Word>(lineGroup.OrderBy(w => w.BoundingBox.Left))
- }).ToDictionary(k => k.above, v => v.words);
+            var words_inLine = new Dictionary<bool, List<Word>>();
+            foreach (var word in wordsInRects)
+            {
+                bool isAbove = word.BoundingBox.Top > xxx.Centroid.Y;
+                if (!words_inLine.ContainsKey(isAbove)) words_inLine[isAbove] = new List<Word>();
+                words_inLine[isAbove].Add(word);
+            }
+            foreach (var linegrp in words_inLine)
+                linegrp.Value.Sort((w1, w2) => w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left));
             return words_inLine;
         }
-        private static void Parse_all()
+        internal static Tuple<Table, Dictionary<string, List<string>>> Parse_forms(bool openFiles = false)
         {
-            var allTypes = Get_DocumentTypes();
-            foreach (var pdfType in allTypes)
-                foreach (var pdf in pdfType.Value) Parse_form(pdf);
-            Debugger.Break();
+            Table allTables = new Table();
+            Dictionary<string, List<string>> allContacts = new Dictionary<string, List<string>>();
+            foreach (var jobFolder in jobsFolder.EnumerateDirectories())
+            {
+                var parsedForms = Parse_forms(jobFolder, openFiles);
+                allTables.Merge(parsedForms.Item1);
+                foreach (var contact in parsedForms.Item2)
+                {
+                    if (!allContacts.ContainsKey(contact.Key)) allContacts[contact.Key] = new List<string>();
+                    allContacts[contact.Key].AddRange(contact.Value);
+                }
+            }
+            return Tuple.Create(allTables, allContacts);
+        }
+        private static Tuple<Table, Dictionary<string, List<string>>> Parse_forms(DirectoryInfo jobFolder, bool openFiles = false)
+        {
+            Table folderTable = new Table();
+            Dictionary<string, List<string>> contacts = new Dictionary<string, List<string>>();
+            foreach (var file in jobFolder.EnumerateFiles("*.pdf").Where(f=>Regex.IsMatch(f.Name, "(delivery|quote)_[^.]{1,}\\.pdf")))
+            {
+                var parsedForm = Parse_form(file, openFiles);
+                folderTable.Merge(parsedForm.Item1);
+                foreach (var contact in parsedForm.Item3)
+                {
+                    if (!contacts.ContainsKey(contact.Key)) contacts[contact.Key] = new List<string>();
+                    contacts[contact.Key].Add(contact.Value);
+                }
+            }
+            return Tuple.Create(folderTable, contacts);
         }
         private static Tuple<Table, Document, Dictionary<string, string>> Parse_form(FileInfo jobinfo, bool openFile = false)
         {
@@ -273,8 +344,6 @@ namespace fhInventoryEditor
             else
             {
                 if (openFile) Process.Start($"{jobinfo.FullName}");
-                const byte pageWidth = 112;
-                string emptyLine = new string(' ', pageWidth);
 
                 var ColumnNames = new List<string>();
 
@@ -650,7 +719,9 @@ namespace fhInventoryEditor
                                         string cell1_item = columnWords[ColumnNames[0]];
                                         string cell2_desc = columnWords[ColumnNames[1]];
                                         string cell3_qty = columnWords.ContainsKey(ColumnNames[2]) ? columnWords[ColumnNames[2]] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
-                                        itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, cell3_qty });
+                                        string cell3_nbrs = Regex.Match(cell3_qty, "[$0-9,.]{1,}").Value;
+                                        double.TryParse(cell3_nbrs, out double qtyCell);
+                                        itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, qtyCell });
                                     } // get all the words in a table row once (for column 0)
                                 }
 
@@ -676,14 +747,12 @@ namespace fhInventoryEditor
                         }
                     }
 
-                    #region" save .txt file - assumes pdf filename is the correct format "
-                    // save the table
-                    string newFilePath = jobinfo.FullName.Replace(".pdf", ".txt");
-                    File.WriteAllText(newFilePath, JsonConvert.SerializeObject(itemTable, Formatting.Indented));
-                    
-                    // save the contacts dictionary
-                    //string contactsPath = $"{jobinfo.Directory.FullName}\\contacts_{documentTypeLanguage} {Guid.NewGuid()}.txt";
-                    //File.WriteAllText(contactsPath, JsonConvert.SerializeObject(contacts, Formatting.Indented));
+                    #region" save .txt file - MUST assume pdf filename is the correct format "
+                    // save the contacts dictionary + products table in a Tuple as -->  delivery_Centre Evasion
+                    string directoryFullPath = $"{jobinfo.DirectoryName}\\{jobinfo.Directory.Name}";
+                    var newFilePath = new FileInfo(jobinfo.FullName.Replace(".pdf", ".txt"));
+                    var fileTuple = Tuple.Create(contacts, itemTable);
+                    File.WriteAllText(newFilePath.FullName, JsonConvert.SerializeObject(fileTuple, Formatting.Indented));
                     #endregion
                 }
                 return Tuple.Create(itemTable, documentTypeLanguage, contacts);
@@ -768,7 +837,7 @@ namespace fhInventoryEditor
             }
             return keysAndValues;
         }
-        private void Send_gmail()
+        internal void Send_gmail()
         {
             // https://myaccount.google.com/lesssecureapps?pli=1&rapt=AEjHL4POmWnx38P9p4UgNgPHjEGTYiuFPrxoOX9MSGslj7mZVhJ6k3-pvQUxFYVQHojrNkiQx0t9YosWMXcbbUxfGg5_bg1PFA
             using (MailMessage mail = new MailMessage())
