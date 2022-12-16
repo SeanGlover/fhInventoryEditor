@@ -19,6 +19,9 @@ using System.Net.Mail;
 using System.Runtime.Remoting.Messaging;
 using System.Xml.Linq;
 using System.Diagnostics.Contracts;
+using static System.Collections.Specialized.BitVector32;
+using System.Drawing.Printing;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.ListView;
 
 namespace fhInventoryEditor
 {
@@ -63,12 +66,18 @@ namespace fhInventoryEditor
             //Debugger.Break();
             //Get_samples();
             //Debugger.Break();
-            // new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\")
+
+            //var form = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Prescott Russell_Hawkesbury/delivery_Prescott Russell_Hawkesbury.pdf"));
+            //Debugger.Break();
+            //new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\")
 
             DateTime startTime = DateTime.Now;
             var forms = Parse_forms();
-            string contacts = string.Join(Environment.NewLine, forms.Item2.Keys);
+            string contacts = string.Join(Environment.NewLine, forms.Item2.Select(kvp => $"{kvp.Key}|{string.Join("|", kvp.Value.Distinct())}"));
             string html = forms.Item1.HTML;
+            var codeList = new List<string>(forms.Item1.Rows.Values.Select(r => r["item"].ToString()).Distinct());
+            codeList.Sort();
+            string codes = string.Join(Environment.NewLine, codeList);
             //var moves = SaveAll_byType("Centre Evasion");
             DateTime endTime = DateTime.Now;
             TimeSpan elapsed = endTime - startTime;
@@ -356,21 +365,24 @@ namespace fhInventoryEditor
                 var contacts = new Dictionary<string, string>();
                 var tableRows = new Dictionary<byte, string>();
                 var documentTypeLanguage = Get_documentTypeLanguage(jobinfo);
+                var letters_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<double, Dictionary<int, Letter>>>>();
+                var consecutiveLetters_byPage = new Dictionary<byte, Dictionary<double, Dictionary<byte, Dictionary<int, Letter>>>>();
 
                 using (PdfDocument document = PdfDocument.Open(jobinfo.FullName))
                 {
-                    var fonts_byPage = new Dictionary<byte, Dictionary<string, List<Word>>>();
-                    var letters_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<double, Dictionary<int, Letter>>>>();
-                    var consecutiveLetters_byPage = new Dictionary<byte, Dictionary<byte, Dictionary<byte, Dictionary<int, Letter>>>>();
                     var colRects = new Dictionary<string, PdfRectangle>();
                     var colNames = new Dictionary<string, Word>();
                     var cols = new List<double>();
+                    PageRegion pgRegion = new PageRegion();
 
                     foreach (Page page in document.GetPages())
                     {
+                        byte pageNbr = Convert.ToByte(page.Number);
                         string pageText = page.Text;
-                        PageRegion pgRegion = new PageRegion();
+                        const byte margin = 2;
 
+                        var consecutiveLetters_thisPage = new Dictionary<double, Dictionary<byte, Dictionary<int, Letter>>>();
+                        consecutiveLetters_byPage[pageNbr] = consecutiveLetters_thisPage;
                         var boxes = page.ExperimentalAccess.Paths.Select(p => p.GetBoundingRectangle()).Where(bb => bb.HasValue).Select(bb => bb.Value).ToList();
                         var pdfRects = new List<PdfRectangle>(boxes.Distinct());
                         pdfRects.Sort((r1, r2) =>
@@ -390,6 +402,7 @@ namespace fhInventoryEditor
                             }
                         });
 
+                        #region" words_thisPage "
                         List<Word> words = new List<Word>(page.GetWords());
                         words.Sort((w1, w2) =>
                         {
@@ -401,10 +414,121 @@ namespace fhInventoryEditor
                                 return lvl2;
                             }
                         });
+                        var wordDict = new Dictionary<int, Word>();
+                        foreach (var word in words)
+                            wordDict.Add(wordDict.Count, word);
+                        var yGroups = new Dictionary<double, List<Word>>();
+                        while (wordDict.Any())
+                        {
+                            var anyWord = wordDict.First();
+                            var word = anyWord.Value;
+                            // it is possible to have the word rectangle not include the letters that make up the word!! FFS
+                            double bot = new double[] { word.Letters.Min(l => l.GlyphRectangle.Bottom), word.BoundingBox.Bottom }.Min();
+                            double top = new double[] { word.Letters.Max(l => l.GlyphRectangle.Top), word.BoundingBox.Top }.Max();
+                            double lft = new double[] { word.Letters.Min(l => l.GlyphRectangle.Left), word.BoundingBox.Left }.Min();
+                            double rgt = new double[] { word.Letters.Max(l => l.GlyphRectangle.Right), word.BoundingBox.Right }.Max();
+                            var rect = new PdfRectangle(new PdfPoint(lft, bot), new PdfPoint(rgt, top));
+                            var rectBottom = rect.Bottom;
+                            var line = new PdfRectangle(new PdfPoint(0, rectBottom - margin), new PdfPoint(10000, rect.Top + margin));
+                            var wordsInLine = wordDict.Where(w => line.IntersectsWith(w.Value.BoundingBox)).ToDictionary(k => k.Key, v => v.Value);
 
-                        List<Letter> letters = new List<Letter>(page.Letters.OrderBy(l => l.GlyphRectangle.Left));
+                            //Y = lettersInLine.Min(l => l.Value.GlyphRectangle.Bottom);
+                            //Y = LineNbr_round(Y);
 
-                        byte pageNbr = Convert.ToByte(page.Number);
+                            yGroups[rectBottom] = new List<Word>(wordsInLine.Values);
+                            yGroups[rectBottom].Sort((l1, l2) => l1.BoundingBox.Left.CompareTo(l2.BoundingBox.Left));
+                            foreach (var wrd in wordsInLine) wordDict.Remove(wrd.Key);
+                        }
+
+                        var words_thisPage = new Dictionary<double, List<Word>>();
+                        var wordLines_thisPage = new Dictionary<double, string>();
+                        foreach (var yGroup in yGroups)
+                        {
+                            var orderedWords = yGroup.Value;
+                            orderedWords.Sort((w1, w2) => w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left));
+                            double lineNbr = LineNbr_round(yGroup.Key);
+                            words_thisPage[lineNbr] = new List<Word>(orderedWords);
+                            wordLines_thisPage[lineNbr] = string.Join(" ", orderedWords.Select(w => w.Text));
+                        }
+                        #endregion
+                        #region" letters_thisPage "
+                        List<Letter> letters = new List<Letter>(page.Letters);
+                        letters.Sort((l1, l2) =>
+                        {
+                            int lvl1 = l2.GlyphRectangle.Bottom.CompareTo(l1.GlyphRectangle.Bottom);
+                            if (lvl1 != 0) return lvl1;
+                            int lvl2 = l1.GlyphRectangle.Left.CompareTo(l2.GlyphRectangle.Left);
+                            return lvl2;
+                        });
+                        var letterDict = new Dictionary<int, Letter>();
+                        foreach (var letter in letters)
+                            letterDict.Add(letterDict.Count, letter);
+                        var Ygroups = new Dictionary<double, List<Letter>>();
+
+                        while (letterDict.Any())
+                        {
+                            var anyLetter = letterDict.First();
+                            PdfRectangle rect;
+                            var wordLetters = new List<Word>(words.Where(w => (from x in w.Letters where x == anyLetter.Value select x).Any()));
+                            if (wordLetters.Any())
+                            {
+                                // it is possible to have the word rectangle not include the letters that make up the word!! FFS
+                                var word = wordLetters.First();
+                                double bot = new double[] { word.Letters.Min(l => l.GlyphRectangle.Bottom), word.BoundingBox.Bottom }.Min();
+                                double top = new double[] { word.Letters.Max(l => l.GlyphRectangle.Top), word.BoundingBox.Top }.Max();
+                                double lft = new double[] { word.Letters.Min(l => l.GlyphRectangle.Left), word.BoundingBox.Left }.Min();
+                                double rgt = new double[] { word.Letters.Max(l => l.GlyphRectangle.Right), word.BoundingBox.Right }.Max();
+                                rect = new PdfRectangle(new PdfPoint(lft, bot), new PdfPoint(rgt, top));
+                            }
+                            else
+                                rect = anyLetter.Value.GlyphRectangle;
+                            var rectBottom = rect.Bottom;
+                            var line = new PdfRectangle(new PdfPoint(0, rectBottom - margin), new PdfPoint(10000, rect.Top + margin));
+                            var lettersInLine = letterDict.Where(l => line.IntersectsWith(l.Value.GlyphRectangle)).ToDictionary(k => k.Key, v => v.Value);
+
+                            //Y = lettersInLine.Min(l => l.Value.GlyphRectangle.Bottom);
+                            //Y = LineNbr_round(Y);
+
+                            Ygroups[rectBottom] = new List<Letter>(lettersInLine.Values);
+                            Ygroups[rectBottom].Sort((l1, l2) => l1.StartBaseLine.X.CompareTo(l2.StartBaseLine.X));
+                            foreach (var letter in lettersInLine) letterDict.Remove(letter.Key);
+                        }
+                        var letters_thisPage = new Dictionary<double, List<Letter>>();
+                        var letterLines_thisPage = new Dictionary<double, string>();
+                        foreach (var Ygroup in Ygroups)
+                        {
+                            var orderedLetters = Ygroup.Value;
+                            orderedLetters.Sort((l1, l2) => l1.StartBaseLine.X.CompareTo(l2.StartBaseLine.X));
+                            double lineNbr = LineNbr_round(Ygroup.Key);
+                            letters_thisPage[lineNbr] = new List<Letter>(orderedLetters);
+
+                            byte wordIndex = 0;
+                            var avgLetterWidth = orderedLetters.Average(l => l.GlyphRectangle.Width);
+                            var remainingLetters = new Dictionary<int, Letter>();
+                            foreach (var letter in orderedLetters) remainingLetters.Add(remainingLetters.Count, letter);
+                            var firstInChain = remainingLetters.First();
+                            consecutiveLetters_thisPage[lineNbr] = new Dictionary<byte, Dictionary<int, Letter>>();
+                            var words_thisLine = consecutiveLetters_thisPage[lineNbr];
+                            while (remainingLetters.Any())
+                            {
+                                if (!words_thisLine.ContainsKey(wordIndex))
+                                    words_thisLine[wordIndex] = new Dictionary<int, Letter>();
+                                remainingLetters.Remove(firstInChain.Key);
+                                words_thisLine[wordIndex].Add(words_thisLine[wordIndex].Count, firstInChain.Value);
+                                var nextInChain = new List<KeyValuePair<int, Letter>>(remainingLetters.Where(nextLetter => (nextLetter.Value.StartBaseLine.X - firstInChain.Value.EndBaseLine.X) < 2));
+                                if (nextInChain.Any())
+                                    firstInChain = nextInChain.First();
+                                else if (remainingLetters.Any())
+                                {
+                                    firstInChain = remainingLetters.First();
+                                    wordIndex++;
+                                }
+                            }
+                            letterLines_thisPage[lineNbr] = string.Join("■", words_thisLine.Select(w => string.Join("", w.Value.Values.Select(l => l.Value))));
+                        }
+                        #endregion
+
+                        #region" table is on this page - get column names, and column left positions + contact info ONCE "
                         if (Regex.IsMatch(pageText, "ITEM {0,}# {0,}DESCRIPTION {0,}Q", RegexOptions.IgnoreCase))
                         {
                             var widthDictionary = new Dictionary<double, List<PdfRectangle>>();
@@ -506,24 +630,42 @@ namespace fhInventoryEditor
 
                             double tableDataTop = tableColumnLefts[1].Top; // column[0] line may extend all the way to the top of the document so use 1 which should stop at the table top
                             var wordsAboveTable = new List<Word>(words.Where(w => w.BoundingBox.Bottom > tableDataTop));
+
+                            // [663, Date:■le 28 octobre 2016]
+                            // [660,  ]
+                            // [648, QUOTE#:■NSOPP4361■Consultant:■Nicole■Segal]
+                            // [645,  ■ ]
+                            // [633, Reference #:■P0701984 modifié-PHASE 1  (Offre spéciale fin d'annéeE)-Mail:  ■nicole.segal@flaghouse.com] <-- letters works better than words
+                            // [612, Attention:■Dominique Lambert■Phone #:■418- 276-5101]
+                            // [600, Client:■Ecole Ste Therese■Fax #:]
+                            // [591, Address:■242, 3 e Avenue■E-Mail:■LambertD@cspaysbleuets.qc.ca]
+                            // [582, Dolbeau Mistassini,  QC  G8L 2V4]
+
+                            var wordsContact = new List<Word>();
                             if (documentTypeLanguage.type == DocumentType.delivery)
                             {
                                 double VERIFICATION = new List<Word>(wordsAboveTable.Where(w => Regex.IsMatch(w.Text, "v(e|é)rification", RegexOptions.IgnoreCase))).FirstOrDefault().BoundingBox.Bottom;
                                 double PLEASENOTE = new List<Word>(wordsAboveTable.Where(w => Regex.IsMatch(w.Text, "NOTE(R){0,1}:"))).FirstOrDefault().BoundingBox.Top;
                                 var wordsAboveDisclaimer = new List<Word>(wordsAboveTable.Where(w => w.BoundingBox.Bottom > PLEASENOTE));
-                                var wordsContact = new List<Word>(wordsAboveDisclaimer.Where(w => w.BoundingBox.Top < VERIFICATION));
-                                contacts = Get_contactKeysValues(wordsContact, col3_qtyLeft, 3);
+                                wordsContact.AddRange(wordsAboveDisclaimer.Where(w => w.BoundingBox.Top < VERIFICATION));
+                                contacts = Get_contactKeysValues(wordsContact, col3_qtyLeft, 3); // <-- delivery forms have values floating above the line, so more margin needed
                             }
                             if (documentTypeLanguage.type == DocumentType.quote)
                             {
+                                // contact words / letters are below the phone #
+                                // 235 Yorkland Blvd., Suite 105, North York, Ontario, M2J 4Y8
+                                // Phone: 1-800-265-6900 Fax: 1-800-265-6922 www.snoezeleninfo.com
                                 var phoneNumber = new List<Word>(words.Where(w => w.Text.Contains("1-800-265-6900")));
                                 if (phoneNumber.Any())
                                 {
-                                    var wordsContact = new List<Word>(wordsAboveTable.Where(w => w.BoundingBox.Top < phoneNumber.First().BoundingBox.Bottom));
+                                    double phoneBottom = LineNbr_round(phoneNumber.First().BoundingBox.Bottom);
+                                    wordsContact.AddRange(wordsAboveTable.Where(w => w.BoundingBox.Top < phoneBottom));
                                     contacts = Get_contactKeysValues(wordsContact, col3_qtyLeft, 0);
+
+                                    // nice attempt but with either a words or letters approach, some data is corrupted by overlapping
+                                    // var cl = consecutiveLetters_thisPage.Where(w => w.Key > tableDataTop & w.Key < phoneBottom).ToDictionary(k => k.Key, v => v.Value);
                                 }
                             }
-
                             #region" column names "
                             var firstColumnName = new List<Word>(words.Where(w => w.Text == "ITEM"));
                             if (firstColumnName.Any())
@@ -537,216 +679,101 @@ namespace fhInventoryEditor
                             }
                             #endregion
                         }
-                        if (words.Any())
+                        #endregion
+
+                        #region" could be any region on the page- as long as there are words (some pages have pictures only) "
+                        foreach (var line in words_thisPage.Where(w => w.Value.Any()))
                         {
-                            #region" fonts --> size(w,h) "
-                            var fonts = new Dictionary<string, List<Word>>();
-                            foreach (var word in words)
+                            var wordsThisLine = new List<Word>(line.Value);
+                            string lineData = string.Join(" ", wordsThisLine.Select(w => w.Text));
+                            if (Regex.IsMatch(lineData, "ITEM {0,}# {0,}DESCRIPTION {0,}Q"))
                             {
-                                string fontname = word.FontName;
-                                if (!fonts.ContainsKey(fontname)) fonts[fontname] = new List<Word>();
-                                fonts[fontname].Add(word);
+                                var colWord = colNames["ITEM"];
+                                var colRect = colWord.BoundingBox;
+                                var boundingRects = new List<PdfRectangle>(pdfRects.Where(r => r.Contains(colRect)).OrderBy(r => r.Area)); // smallest to largest
+                                var tableHeadRect = boundingRects.FirstOrDefault(); // this should be the table heading rectangle that contains the column names
+                                var intersectRects = new List<PdfRectangle>(pdfRects.Where(r => tableHeadRect.IntersectsWith(r)).OrderBy(r => r.Width));
+                                var lefts = new List<double>(intersectRects.Select(r => r.Left).Distinct());
+                                lefts.Sort();
+                                foreach (double l1 in lefts)
+                                {
+                                    var leftGroup = new List<double>();
+                                    foreach (var l2 in lefts)
+                                    {
+                                        double min = new double[] { l1, l2 }.Min();
+                                        double max = new double[] { l1, l2 }.Max();
+                                        double min_max = min / max;
+                                        if (min_max >= .9) leftGroup.Add(l2);
+                                    }
+                                    if (leftGroup.Any()) cols.Add(leftGroup.Min());
+                                }
+                                cols = cols.Distinct().ToList();
+                                cols.Sort();
+                                var cols_colRects = new List<double>();
+                                foreach (var cRect in colRects)
+                                {
+                                    var cR = cols.Where(c => c < cRect.Value.Left).Max();
+                                    cols_colRects.Add(cR);
+                                }
+                                cols = cols_colRects;
+                                cols.Sort();
+
+                                pgRegion = PageRegion.table_data;
                             }
-                            fonts_byPage[pageNbr] = fonts;
-                            Dictionary<string, double> width_byFont = new Dictionary<string, double>();
-                            Dictionary<string, double> height_byFont = new Dictionary<string, double>();
-                            foreach (string fontName in fonts.Keys)
+                            else if (pgRegion == PageRegion.table_data)
                             {
-                                double fw = 0;
-                                double fh = 0;
-                                List<Word> fontWords = fonts[fontName];
-                                fontWords.Sort((y1, y2) => y2.Letters.Count.CompareTo(y1.Letters.Count));
-                                if (fontWords.Any())
+                                var firstWord = wordsThisLine[0];
+                                Letter firstLetter_inWord = firstWord.Letters[0];
+                                var colIndex = cols.IndexOf(cols.Where(c => c < firstLetter_inWord.StartBaseLine.X).Max());
+                                if (colIndex == 0)
                                 {
-                                    List<Letter> longestWordLetters = new List<Letter>(fontWords.First().Letters);
-                                    List<double> fontXs = new List<double>(longestWordLetters.Select(x => Math.Round(x.Location.X, 1)).Distinct());
-                                    List<double> fontHs = new List<double>(longestWordLetters.Select(x => Math.Round(x.GlyphRectangle.Height, 1)).Distinct());
-                                    fw = Math.Round((fontXs.Max() - fontXs.Min()) / (fontXs.Count - 1), 1);
-                                    fh = Math.Round(fontHs.Max(), 1);
-                                }
-                                width_byFont.Add(fontName, fw);
-                                height_byFont.Add(fontName, fh);
-                            }
-                            fonts = fonts.OrderByDescending(f => f.Value.Count).ToDictionary(k => k.Key, v => v.Value);
-                            string mostCommonFont = fonts.Keys.FirstOrDefault().ToString();
-                            double fontWidth = width_byFont[mostCommonFont];
-                            double fontHeight = 10; //height_byFont[mostCommonFont];
-                            #endregion
-                            #region" letters_thisPage "
-                            var letters_thisPage = new Dictionary<byte, Dictionary<double, Dictionary<int, Letter>>>();
-                            foreach (var ltr in page.Letters)
-                            {
-                                double Y = ltr.StartBaseLine.Y;
-                                byte lineNbr = Convert.ToByte(Y / fontHeight);
-                                if (!letters_thisPage.ContainsKey(lineNbr)) letters_thisPage[lineNbr] = new Dictionary<double, Dictionary<int, Letter>>();
-                                if (!letters_thisPage[lineNbr].ContainsKey(Y)) letters_thisPage[lineNbr][Y] = new Dictionary<int, Letter>();
-                                letters_thisPage[lineNbr][Y].Add(letters_thisPage[lineNbr][Y].Count, ltr);
-                            }
-                            letters_thisPage = letters_thisPage.OrderByDescending(y => y.Key).ToDictionary(k => k.Key, y => y.Value);
-                            letters_byPage[pageNbr] = letters_thisPage;
-                            #endregion
-                            var lines_thisPage = new Dictionary<double, string>();
-                            var lines = new List<string>();
-                            consecutiveLetters_byPage[pageNbr] = new Dictionary<byte, Dictionary<byte, Dictionary<int, Letter>>>();
-                            foreach (byte lineNbr in letters_thisPage.Keys)
-                            {
-                                byte groupIndex = 0;
-                                var consecutiveLetters = new Dictionary<byte, Dictionary<int, Letter>>();
-                                var lineGroups = letters_thisPage[lineNbr];
-                                foreach (double lineY in lineGroups.Keys)
-                                {
-                                    if (lineY != 0)
+                                    PdfRectangle letterGlyph = firstLetter_inWord.GlyphRectangle;
+                                    var words_thisLine = Words_inLine(letterGlyph, words);
+                                    var words_byColumn = new Dictionary<string, List<Word>>();
+                                    foreach (var isAbove in words_thisLine)
                                     {
-                                        Dictionary<int, Letter> indexedLetters = letters_thisPage[lineNbr][lineY];
-                                        Dictionary<int, Letter> remainingLetters = new Dictionary<int, Letter>(indexedLetters);
-                                        KeyValuePair<int, Letter> firstInChain = new KeyValuePair<int, Letter>(0, indexedLetters[0]);
-                                        consecutiveLetters[groupIndex] = new Dictionary<int, Letter>();
-
-                                        while (remainingLetters.Any())
+                                        foreach (var word in words_thisLine[isAbove.Key])
                                         {
-                                            remainingLetters.Remove(firstInChain.Key);
-                                            consecutiveLetters[groupIndex].Add(consecutiveLetters[groupIndex].Count, firstInChain.Value);
-                                            var nextInChain = new List<KeyValuePair<int, Letter>>(remainingLetters.Where(nextLetter => (nextLetter.Value.StartBaseLine.X - firstInChain.Value.EndBaseLine.X) < 2));
-                                            if (nextInChain.Any()) { firstInChain = nextInChain.First(); }
-                                            else if (remainingLetters.Any())
-                                            {
-                                                firstInChain = remainingLetters.First();
-                                                groupIndex++;
-                                                consecutiveLetters[groupIndex] = new Dictionary<int, Letter>();
-                                            }
-                                        }
-                                        groupIndex++;
-                                    }
-                                    groupIndex++;
-                                }
-                                var letterStrings = new Dictionary<byte, Dictionary<int, Letter>>(consecutiveLetters);
-                                consecutiveLetters.Clear();
-
-                                foreach (var letterGroup in letterStrings.OrderBy(cl => cl.Value.Min(l => l.Value.StartBaseLine.X)))
-                                    consecutiveLetters.Add((byte)consecutiveLetters.Count, letterGroup.Value);
-
-                                consecutiveLetters_byPage[pageNbr][lineNbr] = consecutiveLetters;
-                                string line = string.Join("■", consecutiveLetters.Select(cl => string.Join(string.Empty, cl.Value.Select(l => l.Value.Value))));
-                                string lineData = $"{lineNbr:000}_{consecutiveLetters[0][0].StartBaseLine.X:000.0}|{line}";
-                                lines.Add(lineData);
-                                lines_thisPage[lineNbr] = line;
-                                if (lineData.Contains("ITEM #"))
-                                {
-                                    var colWord = colNames["ITEM"];
-                                    var colRect = colWord.BoundingBox;
-                                    var boundingRects = new List<PdfRectangle>(pdfRects.Where(r => r.Contains(colRect)).OrderBy(r => r.Area)); // smallest to largest
-                                    var tableHeadRect = boundingRects.FirstOrDefault(); // this should be the table heading rectangle that contains the column names
-                                    var intersectRects = new List<PdfRectangle>(pdfRects.Where(r => tableHeadRect.IntersectsWith(r)).OrderBy(r => r.Width));
-                                    foreach (PdfRectangle r1 in intersectRects)
-                                    {
-                                        foreach (PdfRectangle r2 in colRects.Values)
-                                        {
-                                            if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
-                                                Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
-                                        }
-                                        foreach (Word w in words)
-                                        {
-                                            var r2 = w.BoundingBox;
-                                            if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
-                                                Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
-                                        }
-                                        foreach (Letter l in letters)
-                                        {
-                                            var r2 = l.GlyphRectangle;
-                                            if (r1.Area == r2.Area & r1.Left == r2.Left & r1.Top == r2.Top & r1.Bottom == r2.Bottom & r1.Right == r2.Right)
-                                                Debugger.Break(); // dont want any of the colrects in the intersects results (and cant use Except)
+                                            colIndex = cols.IndexOf(cols.Where(c => c < word.Letters[0].StartBaseLine.X).Max());
+                                            string colName = ColumnNames[colIndex];
+                                            if (!words_byColumn.ContainsKey(colName)) words_byColumn[colName] = new List<Word>();
+                                            words_byColumn[colName].Add(word);
                                         }
                                     }
-                                    var lefts = new List<double>(intersectRects.Select(r => r.Left).Distinct());
-                                    lefts.Sort();
-                                    foreach (double l1 in lefts)
+                                    var columnWords = new Dictionary<string, string>();
+                                    foreach (var col in words_byColumn)
                                     {
-                                        var leftGroup = new List<double>();
-                                        foreach (var l2 in lefts)
-                                        {
-                                            double min = new double[] { l1, l2 }.Min();
-                                            double max = new double[] { l1, l2 }.Max();
-                                            double min_max = min / max;
-                                            if (min_max >= .9) leftGroup.Add(l2);
-                                        }
-                                        if (leftGroup.Any()) cols.Add(leftGroup.Min());
+                                        var cleanDescription = CleanDescription(string.Join(" ", col.Value.Select(w => w.Text)));
+                                        columnWords[col.Key] = cleanDescription;
+                                        //if (cleanDescription.Contains("ULTRA")) Debugger.Break();
                                     }
-                                    cols = cols.Distinct().ToList();
-                                    cols.Sort();
-                                    var cols_colRects = new List<double>();
-                                    foreach (var cRect in colRects)
-                                    {
-                                        var cR = cols.Where(c => c < cRect.Value.Left).Max();
-                                        cols_colRects.Add(cR);
-                                    }
-                                    cols = cols_colRects;
-                                    cols.Sort();
+                                    foreach (var columnName in ColumnNames) if (!columnWords.ContainsKey(columnName)) columnWords[columnName] = string.Empty;
+                                    tableRows.Add((byte)tableRows.Count, JsonConvert.SerializeObject(columnWords, Formatting.None));
 
-                                    pgRegion = PageRegion.table_data;
-                                }
-                                else if (pgRegion == PageRegion.table_data)
-                                {
-                                    const byte wordGrp = 0;
-                                    var letterGrp = consecutiveLetters[wordGrp];
-                                    Letter firstLetter_inWord = letterGrp[0];
-                                    var colIndex = cols.IndexOf(cols.Where(c => c < firstLetter_inWord.StartBaseLine.X).Max());
-                                    string code = string.Join(string.Empty, letterGrp.OrderBy(l => l.Key).Select(l => l.Value.Value)).Replace(" #", string.Empty).Trim();
-                                    if (colIndex == 0)
-                                    {
-                                        PdfRectangle letterGlyph = firstLetter_inWord.GlyphRectangle;
-                                        var words_thisLine = Words_inLine(letterGlyph, words);
-                                        var words_byColumn = new Dictionary<string, List<Word>>();
-                                        foreach (var isAbove in words_thisLine)
-                                        {
-                                            foreach (var word in words_thisLine[isAbove.Key])
-                                            {
-                                                colIndex = cols.IndexOf(cols.Where(c => c < word.Letters[0].StartBaseLine.X).Max());
-                                                string colName = ColumnNames[colIndex];
-                                                if (!words_byColumn.ContainsKey(colName)) words_byColumn[colName] = new List<Word>();
-                                                words_byColumn[colName].Add(word);
-                                            }
-                                        }
-                                        var columnWords = new Dictionary<string, string>();
-                                        foreach (var col in words_byColumn)
-                                        {
-                                            var cleanDescription = CleanDescription(string.Join(" ", col.Value.Select(w => w.Text)));
-                                            columnWords[col.Key] = cleanDescription;
-                                            //if (cleanDescription.Contains("ULTRA")) Debugger.Break();
-                                        }
-                                        foreach (var columnName in ColumnNames) if (!columnWords.ContainsKey(columnName)) columnWords[columnName] = string.Empty;
-                                        tableRows.Add((byte)tableRows.Count, JsonConvert.SerializeObject(columnWords, Formatting.None));
+                                    string cell1_item = columnWords[ColumnNames[0]];
+                                    string cell2_desc = columnWords[ColumnNames[1]];
+                                    string cell3_qty = columnWords.ContainsKey(ColumnNames[2]) ? columnWords[ColumnNames[2]] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
+                                    string cell3_nbrs = Regex.Match(cell3_qty, "[$0-9,.]{1,}").Value;
+                                    double.TryParse(cell3_nbrs, out double qtyCell);
+                                    itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, qtyCell });
+                                } // get all the words in a table row once (for column 0)
 
-                                        string cell1_item = columnWords[ColumnNames[0]];
-                                        string cell2_desc = columnWords[ColumnNames[1]];
-                                        string cell3_qty = columnWords.ContainsKey(ColumnNames[2]) ? columnWords[ColumnNames[2]] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
-                                        string cell3_nbrs = Regex.Match(cell3_qty, "[$0-9,.]{1,}").Value;
-                                        double.TryParse(cell3_nbrs, out double qtyCell);
-                                        itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, qtyCell });
-                                    } // get all the words in a table row once (for column 0)
-                                }
-
-                                if (pgRegion == PageRegion.none & Regex.IsMatch(line, "v(e|é)rification", RegexOptions.IgnoreCase))
-                                    pgRegion = PageRegion.contact;
-                                else if (pgRegion == PageRegion.contact) { }
-                                else if (pgRegion == PageRegion.table_data)
-                                {
-                                    // [117.5] SIGNATURE ■[336.8] DATE
-                                    bool isTableEnd = line.Contains("SIGNATURE") & line.Contains("DATE");
-                                    if (line.Contains("NOM IMPRIMÉ") | line.Contains("PRINTED NAME")) isTableEnd = true;
-                                    if (line.Contains("VEUILLEZ ENVOYER")) isTableEnd = true;
-                                    if (line.Contains("ONCE COMPLETED")) isTableEnd = true;
-                                    if (Regex.IsMatch(line, "page [0-9] of [0-9]", RegexOptions.IgnoreCase)) isTableEnd = true;
-                                    if (line.Contains("TERMES ET CONDITIONS")) isTableEnd = true;
-                                    if (line.Contains("TERMS AND CONDITIONS")) isTableEnd = true;
-                                    if (line.Contains("VIRTUAL INSTALLATION AVAILABLE")) isTableEnd = true;
-                                    if (!line.Any()) isTableEnd = true;
-                                    if (isTableEnd)
-                                        pgRegion = PageRegion.footer;
-                                }
+                                // [117.5] SIGNATURE ■[336.8] DATE
+                                bool isTableEnd = lineData.Contains("SIGNATURE") & lineData.Contains("DATE");
+                                if (lineData.Contains("NOM IMPRIMÉ") | lineData.Contains("PRINTED NAME")) isTableEnd = true;
+                                if (lineData.Contains("VEUILLEZ ENVOYER")) isTableEnd = true;
+                                if (lineData.Contains("ONCE COMPLETED")) isTableEnd = true;
+                                //if (Regex.IsMatch(lineData, "page [0-9] of [0-9]", RegexOptions.IgnoreCase)) isTableEnd = true;
+                                if (lineData.Contains("TERMES ET CONDITIONS")) isTableEnd = true;
+                                if (lineData.Contains("TERMS AND CONDITIONS")) isTableEnd = true;
+                                if (lineData.Contains("VIRTUAL INSTALLATION AVAILABLE")) isTableEnd = true;
+                                if (!lineData.Any()) isTableEnd = true;
+                                if (isTableEnd)
+                                    pgRegion = PageRegion.footer;
                             }
                         }
+                        #endregion
                     }
-
                     #region" save .txt file - MUST assume pdf filename is the correct format "
                     // save the contacts dictionary + products table in a Tuple as -->  delivery_Centre Evasion
                     string directoryFullPath = $"{jobinfo.DirectoryName}\\{jobinfo.Directory.Name}";
@@ -758,6 +785,35 @@ namespace fhInventoryEditor
                 return Tuple.Create(itemTable, documentTypeLanguage, contacts);
             }
         }
+        private const byte roundFactor = 1;
+        private static double LineNbr_round(double Y)=>  Math.Round(Math.Round(Y / roundFactor, 0) * roundFactor);
+        internal static Dictionary<string, string> Get_contactKeysValues(Dictionary<double, Dictionary<byte, Dictionary<int, Letter>>> lines, double col3_qtyLeft)
+        {
+            /// still get --> " eE)-Mail:   nicole.segal@flaghouse.com"
+            /// since the right parenthesis of "(Offre spéciale fin d'année) is overlapped with "E-Mail:" 
+            var keysAndValues = new Dictionary<string, string>();
+            var leftLines = new List<string>();
+            var rightLines = new List<string>();
+            foreach (var line in lines.Values)
+            {
+                var leftWords = new List<string>();
+                var rightWords = new List<string>();
+                foreach (var word in line.Values)
+                {
+                    var letters = new List<Letter>(word.Values);
+                    letters.Sort((l1, l2) => l1.StartBaseLine.X.CompareTo(l2.StartBaseLine.X));
+                    var stringOfLetters = string.Join("", letters.Where(l => l.EndBaseLine.X < col3_qtyLeft).Select(l => l.Value));
+                    leftWords.Add(stringOfLetters);
+                    stringOfLetters = string.Join("", letters.Where(l => l.EndBaseLine.X >= col3_qtyLeft).Select(l => l.Value));
+                    rightWords.Add(stringOfLetters);
+                }
+                var stringOfWords = string.Join(" ", leftWords);
+                leftLines.Add(stringOfWords);
+                stringOfWords = string.Join(" ", rightWords);
+                rightLines.Add(stringOfWords);
+            }
+            return keysAndValues;
+        }
         private static Dictionary<string, string> Get_contactKeysValues(List<Word> words, double col3_qtyLeft, byte margin)
         {
             var keysAndValues = new Dictionary<string, string>();
@@ -765,7 +821,7 @@ namespace fhInventoryEditor
             {
                 int lvl1 = w2.BoundingBox.Bottom.CompareTo(w1.BoundingBox.Bottom);
                 if (lvl1 != 0) return lvl1;
-                int lvl2 = w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left);
+                int lvl2 = w2.BoundingBox.Left.CompareTo(w1.BoundingBox.Left);
                 return lvl2;
             });
             double lineHeight = words.Average(w => w.BoundingBox.Height);
@@ -813,7 +869,9 @@ namespace fhInventoryEditor
                 {
                     string wordKey = string.Join(" ", words_colonLeft.Select(w => w.Text));
                     string wordValue = string.Join(" ", words_colonRight.Select(w => w.Text));
-                    if (!keysAndValues.ContainsKey(wordKey)) keysAndValues[wordKey] = wordValue;
+                    string normalizedKey = Get_key(wordKey);
+                    //if (normalizedKey.Contains("E)-Mail")) Debugger.Break();
+                    if (!keysAndValues.ContainsKey(normalizedKey)) keysAndValues[normalizedKey] = wordValue;
                 }
             }
             else
@@ -832,10 +890,26 @@ namespace fhInventoryEditor
                     if (Regex.IsMatch(wrappedText, "[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][ -]?\\d[ABCEGHJ-NPRSTV-Z]\\d"))
                         keysAndValues.Add("CityProvincePostal", wrappedText);
                     if (Regex.IsMatch(wrappedText, "[A-Z]{3}PP[0-9]{4}"))
-                        keysAndValues.Add("quote#", wrappedText);
+                        keysAndValues.Add("Quote#", wrappedText);
                 }
             }
             return keysAndValues;
+        }
+        private static string Get_key(string keyIn)
+        {
+            if (keyIn == null) return string.Empty;
+            if (Regex.IsMatch(keyIn, "date", RegexOptions.IgnoreCase)) return "Date";
+            if (Regex.IsMatch(keyIn, "(client|customer|Compagnie)", RegexOptions.IgnoreCase)) return "Customer";
+            if (Regex.IsMatch(keyIn, "(order|commande|r(e|é)f(e|é)rence)", RegexOptions.IgnoreCase)) return "Order#";
+            if (Regex.IsMatch(keyIn, "(contact|attention)", RegexOptions.IgnoreCase)) return "Contact";
+            if (Regex.IsMatch(keyIn, "(t(e|é)l(e|é)){0,1}phone {0,}#{0,1}", RegexOptions.IgnoreCase)) return "Phone#";
+            if (Regex.IsMatch(keyIn, "(e-{0,1}mail|courriel|-mail)", RegexOptions.IgnoreCase)) return "email";
+            if (Regex.IsMatch(keyIn, "(consultante{0,1}|((fh|flaghouse) ){0,1}rep)", RegexOptions.IgnoreCase)) return "Rep";
+            if (Regex.IsMatch(keyIn, "(adresse|address)", RegexOptions.IgnoreCase)) return "Address";
+            if (Regex.IsMatch(keyIn, "CityProvincePostal", RegexOptions.IgnoreCase)) return "CityProvincePostal"; // not necessary as is handled in Get_bySide- !words_colon.Any()
+            if (Regex.IsMatch(keyIn, "(quote|soumission) {0,}#", RegexOptions.IgnoreCase)) return "Quote#"; // not necessary as is handled in Get_bySide- !words_colon.Any()
+            if (Regex.IsMatch(keyIn, "(t(e|é)l(e|é)copieur|fax|facsimile)", RegexOptions.IgnoreCase)) return "Fax#"; // who tf still uses a fax machine???
+            return keyIn;
         }
         internal void Send_gmail()
         {
