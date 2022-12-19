@@ -22,6 +22,7 @@ using System.Diagnostics.Contracts;
 using static System.Collections.Specialized.BitVector32;
 using System.Drawing.Printing;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.ListView;
+using System.Globalization;
 
 namespace fhInventoryEditor
 {
@@ -62,18 +63,155 @@ namespace fhInventoryEditor
             ///     1] opens the pdf file and determines the document type and language, but does not parse it
             ///     2] groups pdf files, by folder- or all folders into a dictionary<DocumentType, List<FileInfo>>
 
-            //var type = Get_documentTypeLanguage();
-            //Debugger.Break();
-            //Get_samples();
+            //var mackay = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\MacKay MTL\\RPOPP7167 Philip E Layton Quote.pdf"));
             //Debugger.Break();
 
+            var stringOfAddresses = "Dolbeau, Mistassini, Québec G8L 2V4\r\nDolbeau Mistassini, QC G8L 2V4\r\nOTTAWA, ON K1Z 6R8 CANADA\r\nMONTREAL, QC H4B 1B7 CANADA\r\nOTTAWA, ON K1L 8H2 CANADA\r\nL'ORIGNAL, ON K0B 1K0 CANADA\r\nDOLBEAU MISTASSINI, QC G8L 2V4\r\nOTTAWA, ON K1Z 6R8 C\r\nMONTREAL, QC H3T 1B1 CANADA\r\nMONTREAL, QC H3R 2G3\r\nMONTREAL, QC H3W 1J6 CANADA";
+            List<string> addresses = new List<string>(stringOfAddresses.Split(new string[] { Environment.NewLine }, StringSplitOptions.None));
+            addresses.Sort((a1, a2) => a2.CompareTo(a1));
+            var addressString = CityProvincPostal(addresses[0]);
+            Debugger.Break();
+
+            DirectoryInfo di =new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\xxx\\");
+            foreach (FileInfo file in di.EnumerateFiles("*.txt"))
+                addresses.Add(File.ReadAllText(file.FullName));
+            string allAddresses = string.Join("\n", addresses.Distinct());
+            Debugger.Break();
+            Test_all();
+
+            //Edit_html("mackay");
+            //Debugger.Break();
+
+        }
+        internal void Edit_html(string folder)
+        {
+            var directory = Get_directoryByName(folder);
+            if (directory != null)
+            {
+                var forms = Parse_forms(directory);
+
+                string htmlPath = $"{directory.FullName}\\a_jobSummary\\index.html";
+                if (!File.Exists(htmlPath))
+                    DirectoryCopy("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\", $"{directory.FullName}\\a_jobSummary\\", true);
+
+                htmlEditor.LoadHtml(File.ReadAllText(htmlPath));
+
+                var productsTable = forms.Item1;
+                var contactsTable = forms.Item2;
+                var contacts = new Dictionary<string, string>();
+                var ids = new Dictionary<string, string>
+                {
+                    { "Date", "documentDate" },
+                    { "Customer", "businessName" },
+                    { "Order#", "purchaseOrder" },
+                    { "Contact", "contactName" },
+                    { "Phone#", "contactPhone" },
+                    { "email", "contactEmail" },
+                    { "Rep", "XXX" },
+                    { "Address", "addressStreet" },
+                    { "City", "addressCity" },
+                    { "Province", "Provinces" },
+                    { "PostalCode", "addressPostalCode" },
+                    { "Quote#", "XXX" },
+                    { "Fax#", "XXX" }
+                };
+                foreach (var field in ids.Keys)
+                {
+                    var query = new List<string>(contactsTable.AsEnumerable.Where(r => r["key"].ToString() == field).Select(r => r["value"].ToString().Trim()));
+                    query.Sort((f1, f2) => f2.Length.CompareTo(f1.Length));
+                    if (query.Any())
+                    {
+                        string bestValue = query.First();
+                        if (field == "email")
+                        {
+                            var subQuery = query.Where(q => !q.ToLowerInvariant().Contains("flaghouse"));
+                            if (subQuery.Any()) bestValue = subQuery.First();
+                            bestValue = bestValue.ToLowerInvariant();
+                        }
+                        contacts[field] = bestValue;
+                        if (field == "Date")
+                        {
+                            var canParse = DateTime.TryParse(bestValue, out DateTime documentDate);
+                            if (canParse) bestValue = $"{documentDate:yyyy-MM-dd}";
+                            htmlEditor.GetElementbyId(ids[field]).SetAttributeValue("value", bestValue);
+                            var getDate = htmlEditor.GetElementbyId(ids[field]).GetAttributeValue("value", "");
+                            Debugger.Break();
+                        }
+                        if (field == "Province") bestValue = "Ontario";
+                        htmlEditor.GetElementbyId(ids[field])?.SetAttributeValue("value", bestValue);
+                    }
+                }
+                using (StreamWriter sw = new StreamWriter(htmlPath))
+                {
+                    htmlEditor.Save(sw);
+                }
+                Debugger.Break();
+            }
+        }
+        private static void DirectoryCopy(string sourceDirName, string destDirName, bool copySubDirs)
+        {
+            DirectoryInfo dir = new DirectoryInfo(sourceDirName);
+            DirectoryInfo[] dirs = dir.GetDirectories();
+
+            // If the source directory does not exist, throw an exception.
+            if (!dir.Exists)
+                throw new DirectoryNotFoundException("Source directory does not exist or could not be found: " + sourceDirName);
+
+            // If the destination directory does not exist, create it.
+            if (!Directory.Exists(destDirName))
+                Directory.CreateDirectory(destDirName);
+
+            // Get the file contents of the directory to copy.
+            FileInfo[] files = dir.GetFiles();
+
+            foreach (FileInfo file in files)
+            {
+                // Create the path to the new copy of the file.
+                string temppath = Path.Combine(destDirName, file.Name);
+                file.CopyTo(temppath, false);
+            }
+
+            // If copySubDirs is true, copy the subdirectories.
+            if (copySubDirs)
+                foreach (DirectoryInfo subdir in dirs)
+                {
+                    // Create the subdirectory.
+                    string temppath = Path.Combine(destDirName, subdir.Name);
+
+                    // Copy the subdirectories.
+                    DirectoryCopy(subdir.FullName, temppath, copySubDirs);
+                }
+        }
+        internal static void Get_samples()
+        {
+            var samples = Get_DocumentTypes();
+            samples.Remove(DocumentType.none);
+            foreach (var sampleType in samples)
+                foreach (var pdf in sampleType.Value)
+                    File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
+        }
+        private static void Test_all()
+        {
+            DateTime startTime = DateTime.Now;
+            var forms = Parse_forms();
+            string contacts = string.Join(Environment.NewLine, forms.Item2.AsEnumerable.Select(r => string.Join("|", r["value"].ToString())));
+            string html = forms.Item1.HTML;
+            var codeList = new List<string>(forms.Item1.Rows.Values.Select(r => r["item"].ToString()).Distinct());
+            codeList.Sort();
+            string codes = string.Join(Environment.NewLine, codeList);
+            DateTime endTime = DateTime.Now;
+            TimeSpan elapsed = endTime - startTime;
+            Debugger.Break();
+        }
+        private void Testing()
+        {
             //var form = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Prescott Russell_Hawkesbury/delivery_Prescott Russell_Hawkesbury.pdf"));
             //Debugger.Break();
             //new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion\\")
 
             DateTime startTime = DateTime.Now;
             var forms = Parse_forms();
-            string contacts = string.Join(Environment.NewLine, forms.Item2.Select(kvp => $"{kvp.Key}|{string.Join("|", kvp.Value.Distinct())}"));
+            string contacts = string.Join(Environment.NewLine, forms.Item2.AsEnumerable.Select(r => string.Join("|", r["value"].ToString())));
             string html = forms.Item1.HTML;
             var codeList = new List<string>(forms.Item1.Rows.Values.Select(r => r["item"].ToString()).Distinct());
             codeList.Sort();
@@ -125,22 +263,6 @@ namespace fhInventoryEditor
                 }
             }
             Debugger.Break();
-
-            htmlEditor.LoadHtml(File.ReadAllText(htmlPath));
-            //htmlEditor.GetElementbyId("businessName").SetAttributeValue("value", "Centre Le Cap");
-            //htmlEditor.GetElementbyId("purchaseOrder").SetAttributeValue("value", "");
-            //using (StreamWriter sw = new StreamWriter(htmlPath))
-            //{
-            //    htmlEditor.Save(sw);
-            //}
-        }
-        private static void Get_samples()
-        {
-            var samples = Get_DocumentTypes();
-            samples.Remove(DocumentType.none);
-            foreach (var sampleType in samples)
-                foreach (var pdf in sampleType.Value)
-                    File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
         }
         private static DirectoryInfo Get_directoryByName(string foldername_Or_Filename)
         {
@@ -153,7 +275,7 @@ namespace fhInventoryEditor
                 foreach (var file in allFiles) if (file.Name == foldername_Or_Filename) matchedDirectories.Add(file.Directory);
             }
             else
-                matchedDirectories.AddRange(jobsFolder.EnumerateDirectories().Where(d => d.Name == foldername_Or_Filename));
+                matchedDirectories.AddRange(jobsFolder.EnumerateDirectories().Where(d => Regex.IsMatch(d.Name, foldername_Or_Filename, RegexOptions.IgnoreCase)));
 
             if (matchedDirectories.Any())
                 return matchedDirectories.First();
@@ -315,41 +437,48 @@ namespace fhInventoryEditor
                 linegrp.Value.Sort((w1, w2) => w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left));
             return words_inLine;
         }
-        internal static Tuple<Table, Dictionary<string, List<string>>> Parse_forms(bool openFiles = false)
+        internal static Tuple<Table, Table, List<FileInfo>> Parse_forms(bool openFiles = false)
         {
             Table allTables = new Table();
-            Dictionary<string, List<string>> allContacts = new Dictionary<string, List<string>>();
+            Table allContacts = new Table();
+            List<FileInfo> files = new List<FileInfo>();
             foreach (var jobFolder in jobsFolder.EnumerateDirectories())
             {
                 var parsedForms = Parse_forms(jobFolder, openFiles);
                 allTables.Merge(parsedForms.Item1);
-                foreach (var contact in parsedForms.Item2)
-                {
-                    if (!allContacts.ContainsKey(contact.Key)) allContacts[contact.Key] = new List<string>();
-                    allContacts[contact.Key].AddRange(contact.Value);
-                }
+                allContacts.Merge(parsedForms.Item2);
+                //foreach (var contact in parsedForms.Item2)
+                //{
+                //    if (!allContacts.ContainsKey(contact.Key)) allContacts[contact.Key] = new List<string>();
+                //    allContacts[contact.Key].AddRange(contact.Value);
+                //    files.AddRange(parsedForms.Item3);
+                //}
             }
-            return Tuple.Create(allTables, allContacts);
+            return Tuple.Create(allTables, allContacts, files);
         }
-        private static Tuple<Table, Dictionary<string, List<string>>> Parse_forms(DirectoryInfo jobFolder, bool openFiles = false)
+        private static Tuple<Table, Table, List<FileInfo>> Parse_forms(DirectoryInfo jobFolder, bool openFiles = false)
         {
             Table folderTable = new Table();
             Dictionary<string, List<string>> contacts = new Dictionary<string, List<string>>();
+            Table contactsTable = new Table();
+            List<FileInfo> files = new List<FileInfo>();
             foreach (var file in jobFolder.EnumerateFiles("*.pdf").Where(f=>Regex.IsMatch(f.Name, "(delivery|quote)_[^.]{1,}\\.pdf")))
             {
                 var parsedForm = Parse_form(file, openFiles);
                 folderTable.Merge(parsedForm.Item1);
-                foreach (var contact in parsedForm.Item3)
-                {
-                    if (!contacts.ContainsKey(contact.Key)) contacts[contact.Key] = new List<string>();
-                    contacts[contact.Key].Add(contact.Value);
-                }
+                files.Add(file);
+                contactsTable.Merge(parsedForm.Item3);
+                //foreach (var contactRow in parsedForm.Item3.AsEnumerable)
+                //{
+                //    if (!contacts.ContainsKey(contact.Key)) contacts[contact.Key] = new List<string>();
+                //    contacts[contact.Key].Add(contact.Value);
+                //}
             }
-            return Tuple.Create(folderTable, contacts);
+            return Tuple.Create(folderTable, contactsTable, files);
         }
-        private static Tuple<Table, Document, Dictionary<string, string>> Parse_form(FileInfo jobinfo, bool openFile = false)
+        private static Tuple<Table, Document, Table> Parse_form(FileInfo jobinfo, bool openFile = false)
         {
-            if (jobinfo == null) return Tuple.Create(new Table(), new Document(), new Dictionary<string, string>());
+            if (jobinfo == null) return Tuple.Create(new Table(), new Document(), new Table());
             else
             {
                 if (openFile) Process.Start($"{jobinfo.FullName}");
@@ -360,6 +489,8 @@ namespace fhInventoryEditor
                 var item = itemTable.Columns.Add("item", typeof(string));
                 var desc = itemTable.Columns.Add("desc", typeof(string));
                 var qty = itemTable.Columns.Add("qty", typeof(double));
+                var path = itemTable.Columns.Add("path", typeof(string));
+                var docDate = itemTable.Columns.Add("date", typeof(DateTime));
                 itemTable.PrimaryKeys = new Table.Column[] { item };
 
                 var contacts = new Dictionary<string, string>();
@@ -582,7 +713,7 @@ namespace fhInventoryEditor
                                     if (thinnestVerticalLine > r1.Width) thinnestVerticalLine = r1.Width;
                                 } // MUST BE > AND = 0! some lines come through with 0 width
                             }
-                            thinnestVerticalLine = Math.Round(thinnestVerticalLine, 2);
+                            thinnestVerticalLine = Math.Ceiling(thinnestVerticalLine);
                             pdfRects_linesHorizontal.Sort((l1, l2) =>
                             {
                                 int lvl1 = l2.Bottom.CompareTo(l1.Bottom);
@@ -607,7 +738,7 @@ namespace fhInventoryEditor
                             double tableWidth = widthDictionary.Keys.First();
                             var tableWidths = new List<PdfRectangle>(pdfRects.Where(r => r.Width == tableWidth).OrderByDescending(r => r.Area));
                             var table_linesVertical = new Dictionary<double, List<PdfRectangle>>();
-                            foreach (var vLine in pdfRects_linesVertical.Where(l => Math.Round(l.Width, 2) == thinnestVerticalLine))
+                            foreach (var vLine in pdfRects_linesVertical.Where(l => Math.Ceiling(l.Width) == thinnestVerticalLine))
                             {
                                 if (!table_linesVertical.ContainsKey(vLine.Left)) table_linesVertical[vLine.Left] = new List<PdfRectangle>();
                                 table_linesVertical[vLine.Left].Add(vLine);
@@ -755,7 +886,7 @@ namespace fhInventoryEditor
                                     string cell3_qty = columnWords.ContainsKey(ColumnNames[2]) ? columnWords[ColumnNames[2]] : string.Empty; // may not contain (ex. MILKY WAY CARPET KIT CONSISTS OF)
                                     string cell3_nbrs = Regex.Match(cell3_qty, "[$0-9,.]{1,}").Value;
                                     double.TryParse(cell3_nbrs, out double qtyCell);
-                                    itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, qtyCell });
+                                    itemTable.Rows.Add(new object[] { cell1_item, cell2_desc, qtyCell, jobinfo.Name, jobinfo.CreationTime });
                                 } // get all the words in a table row once (for column 0)
 
                                 // [117.5] SIGNATURE ■[336.8] DATE
@@ -775,6 +906,7 @@ namespace fhInventoryEditor
                         #endregion
                     }
                     #region" save .txt file - MUST assume pdf filename is the correct format "
+                    itemTable.Name = $"{documentTypeLanguage.type}_{jobinfo.Directory.Name}";
                     // save the contacts dictionary + products table in a Tuple as -->  delivery_Centre Evasion
                     string directoryFullPath = $"{jobinfo.DirectoryName}\\{jobinfo.Directory.Name}";
                     var newFilePath = new FileInfo(jobinfo.FullName.Replace(".pdf", ".txt"));
@@ -782,7 +914,15 @@ namespace fhInventoryEditor
                     File.WriteAllText(newFilePath.FullName, JsonConvert.SerializeObject(fileTuple, Formatting.Indented));
                     #endregion
                 }
-                return Tuple.Create(itemTable, documentTypeLanguage, contacts);
+                var contactsTable = new Table() { Name = "contacts_" + jobinfo.Directory.Name };
+                var nameColumn = contactsTable.Columns.Add("name", typeof(string));
+                var typeColumn = contactsTable.Columns.Add("type", typeof(string));
+                var keyColumn = contactsTable.Columns.Add("key", typeof(string));
+                var valueColumn = contactsTable.Columns.Add("value", typeof(string));
+                contactsTable.PrimaryKeys = new Table.Column[] { keyColumn };
+                foreach (var kvp in contacts)
+                    contactsTable.Rows.Add(new string[] { jobinfo.Name, documentTypeLanguage.ToString(), kvp.Key, kvp.Value });
+                return Tuple.Create(itemTable, documentTypeLanguage, contactsTable);
             }
         }
         private const byte roundFactor = 1;
@@ -849,12 +989,18 @@ namespace fhInventoryEditor
                 foreach (var newKeyValue in rightSide)
                     if (!keysAndValues.ContainsKey(newKeyValue.Key)) keysAndValues.Add(newKeyValue.Key, newKeyValue.Value);
             }
+            //List<string> lines = new List<string>();
+            //foreach (var line in words_byLine)
+            //    lines.Add(string.Join(" ", line.Value.Select(w => string.Join(" ", w.Text))));
+            //File.WriteAllText("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\" + Guid.NewGuid() + ".txt", string.Join(Environment.NewLine, lines));
             return keysAndValues;
         }
         private static Dictionary<string, string> Get_bySide(List<Word> words, double col3_qtyLeft, bool isLeftSide = true)
         {
             var keysAndValues = new Dictionary<string, string>();
             var words_OneSide = new List<Word>();
+            var text = string.Join(" ", words.Select(w => w.Text));
+
             if (isLeftSide)
                 words_OneSide.AddRange(words.Where(w => w.BoundingBox.Right < col3_qtyLeft));
             else
@@ -865,14 +1011,20 @@ namespace fhInventoryEditor
                 var rect_colon = words_colon[0].BoundingBox;
                 var words_colonLeft = new List<Word>(words_OneSide.Where(w => w.BoundingBox.Left <= rect_colon.Left));
                 var words_colonRight = new List<Word>(words_OneSide.Where(w => w.BoundingBox.Left > rect_colon.Left));
-                if (words_colonRight.Any())
+                string wordKey = string.Join(" ", words_colonLeft.Select(w => w.Text));
+                // a pdfword is a string of letters without spaces, so sometimes the value is not a separate word --> QUOTE#:NSOPP5357
+                string wordValue = string.Empty;
+                string[] keyValue = wordKey.Split(':');
+                if (keyValue.Length > 1)
                 {
-                    string wordKey = string.Join(" ", words_colonLeft.Select(w => w.Text));
-                    string wordValue = string.Join(" ", words_colonRight.Select(w => w.Text));
-                    string normalizedKey = Get_key(wordKey);
-                    //if (normalizedKey.Contains("E)-Mail")) Debugger.Break();
-                    if (!keysAndValues.ContainsKey(normalizedKey)) keysAndValues[normalizedKey] = wordValue;
+                    wordKey = keyValue[0];
+                    wordValue = keyValue[1].Trim();
                 }
+                //if(text.Contains("E-Mail")) Debugger.Break();
+                wordValue += words_colonRight.Any() ? string.Join(" ", words_colonRight.Select(w => w.Text)) : string.Empty;
+                string normalizedKey = Get_key(wordKey);
+                if (!keysAndValues.ContainsKey(normalizedKey)) keysAndValues[normalizedKey] = wordValue;
+                //if (words.Where(w => w.Text.Contains("QUOTE")).Any() & words_colonLeft.Where(w => w.Text.Contains("QUOTE")).Any()) Debugger.Break();
             }
             else
             {
@@ -888,7 +1040,21 @@ namespace fhInventoryEditor
                 {
                     string wrappedText = string.Join(" ", words_OneSide).Trim();
                     if (Regex.IsMatch(wrappedText, "[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][ -]?\\d[ABCEGHJ-NPRSTV-Z]\\d"))
-                        keysAndValues.Add("CityProvincePostal", wrappedText);
+                    {
+                        // MONTREAL, QC H3W 1J6 CANADA
+                        keysAndValues.Add("City", string.Empty);
+                        keysAndValues.Add("Province", string.Empty);
+                        keysAndValues.Add("PostalCode", string.Empty);
+                        var addressMatch = Regex.Matches(wrappedText, "(?i)(\\S+)\\s*(?:G[A-Z0-9]+\\s?[A-Z0-9]+)?\\s+");
+                        if (addressMatch.Count == 4)
+                        {
+                            keysAndValues["City"] = addressMatch[0].Value.Trim().Split(',')[0];
+                            var province = addressMatch[1].Value.Trim();
+                            keysAndValues["Province"] = province;
+                            keysAndValues["PostalCode"] = $"{addressMatch[2].Value.Trim()} {addressMatch[3].Value.Trim()}";
+                        }
+                        //File.WriteAllText("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\" + Guid.NewGuid() + ".txt", wrappedText);
+                    }
                     if (Regex.IsMatch(wrappedText, "[A-Z]{3}PP[0-9]{4}"))
                         keysAndValues.Add("Quote#", wrappedText);
                 }
@@ -910,6 +1076,82 @@ namespace fhInventoryEditor
             if (Regex.IsMatch(keyIn, "(quote|soumission) {0,}#", RegexOptions.IgnoreCase)) return "Quote#"; // not necessary as is handled in Get_bySide- !words_colon.Any()
             if (Regex.IsMatch(keyIn, "(t(e|é)l(e|é)copieur|fax|facsimile)", RegexOptions.IgnoreCase)) return "Fax#"; // who tf still uses a fax machine???
             return keyIn;
+        }
+        private static Dictionary<string, string> CityProvincPostal(string address)
+        {
+            if (address == null) return null;
+            var keysAndValues = new Dictionary<string, string>
+            {
+                { "City", string.Empty },
+                { "Province", string.Empty },
+                { "PostalCode", string.Empty }
+            };
+            var postalMatch = Regex.Match(address, "[ABCEGHJ-NPRSTVXY]\\d[ABCEGHJ-NPRSTV-Z][ -]?\\d[ABCEGHJ-NPRSTV-Z]\\d", RegexOptions.IgnoreCase);
+            if (postalMatch.Success)
+            {
+                keysAndValues["PostalCode"] = postalMatch.Value;
+                var cityProvince = address.Substring(0, postalMatch.Index);
+                var addressElements = cityProvince.Split(',');
+                keysAndValues["City"] = string.Join(",", addressElements.Take(addressElements.Length - 1));
+                
+                var province = addressElements.Last().Trim();
+                var provinceFullname = string.Empty;
+                var provinces = new List<Tuple<string, string, string, string>>
+                {
+                    Tuple.Create("Newfoundland and Labrador","Terre-Neuve-et-Labrador","NL","N\\.{0,1}L\\.{0,1}|T\\.{0,1}-N\\.{0,1}-L\\.{0,1}"),
+                    Tuple.Create("Prince Edward Island","Île-du-Prince-Édouard","PE","(P\\.{0,1}E\\.{0,1}I\\.{0,1}|Î\\.{0,1}-P\\.{0,1}-É\\.{0,1})"),
+                    Tuple.Create("Nova Scotia","Nouvelle-Écosse","NS","(N\\.{0,1}S\\.{0,1}|N\\.{0,1}-É\\.{0,1})"),
+                    Tuple.Create("New Brunswick","Nouveau-Brunswick","NB","(N\\.{0,1}B\\.{0,1}|N\\.{0,1}-B\\.{0,1})"),
+                    Tuple.Create("Quebéc","Qu(e|é)bec","QC","(Que\\.{0,1}|Qc)"),
+                    Tuple.Create("Ontario","Ontario","ON","Ont\\.{0,1}"),
+                    Tuple.Create("Manitoba","Manitoba","MB","(Man\\.{0,1}|Man\\.{0,1})"),
+                    Tuple.Create("Saskatchewan","Saskatchewan","SK","Sask\\.{0,1}"),
+                    Tuple.Create("Alberta","Alberta","AB","(Alta\\.{0,1}|Alb\\.{0,1})"),
+                    Tuple.Create("British Columbia","Colombie-Britannique","BC","(B\\.{0,1}C\\.{0,1}|C\\.{0,1}-B\\.{0,1})"),
+                    Tuple.Create("Yukon","Yukon","YK","(Y\\.{0,1}T\\.{0,1}|Yn)"),
+                    Tuple.Create("Northwest Territories","Territoires du Nord-Ouest","NT","(N\\.{0,1}W\\.{0,1}T\\.{0,1}|T\\.{0,1}N\\.{0,1}-O\\.{0,1})"),
+                    Tuple.Create("Nunavut","Nunavut","NT","(Nvt\\.{0,1}|Nt)")
+                };
+                bool foundProvince = false;
+                // english- fullname
+                foreach (var provPattern in provinces)
+                {
+                    if (Regex.IsMatch(province, provPattern.Item1, RegexOptions.IgnoreCase))
+                    {
+                        provinceFullname = provPattern.Item1;
+                        foundProvince = true;
+                        break;
+                    }
+                }
+                if (!foundProvince)
+                {
+                    // french- fullname
+                    foreach (var provPattern in provinces)
+                    {
+                        if (Regex.IsMatch(province, provPattern.Item2, RegexOptions.IgnoreCase))
+                        {
+                            provinceFullname = provPattern.Item1;
+                            foundProvince = true;
+                            break;
+                        }
+                    }
+                }
+                if (!foundProvince)
+                {
+                    // standard abbreviations
+                    foreach (var provPattern in provinces)
+                    {
+                        if (Regex.IsMatch(province, provPattern.Item3, RegexOptions.IgnoreCase))
+                        {
+                            provinceFullname = provPattern.Item1;
+                            foundProvince = true;
+                            break;
+                        }
+                    }
+                }
+                keysAndValues["Province"] = foundProvince ? provinceFullname : province;
+            }
+            return keysAndValues;
         }
         internal void Send_gmail()
         {
