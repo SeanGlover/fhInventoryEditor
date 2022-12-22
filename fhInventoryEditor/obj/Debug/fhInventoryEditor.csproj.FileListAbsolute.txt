@@ -38,3 +38,13 @@ C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\N
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\Newtonsoft.Json.xml
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\DataTableAsync.dll
 C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\DataTableAsync.pdb
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Buffers.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Collections.Immutable.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Memory.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Numerics.Vectors.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Runtime.CompilerServices.Unsafe.dll
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Buffers.xml
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Collections.Immutable.xml
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Memory.xml
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Numerics.Vectors.xml
+C:\Users\SeanGlover\source\repos\fhInventoryEditor\fhInventoryEditor\bin\Debug\System.Runtime.CompilerServices.Unsafe.xml
