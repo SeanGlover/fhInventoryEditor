@@ -17,6 +17,7 @@ using DataTableAsync;
 using System.Net;
 using System.Net.Mail;
 using HtmlAgilityPack;
+using System.Globalization;
 
 namespace fhInventoryEditor
 {
@@ -59,24 +60,126 @@ namespace fhInventoryEditor
             ///     1] opens the pdf file and determines the document type and language, but does not parse it
             ///     2] groups pdf files, by folder- or all folders into a dictionary<DocumentType, List<FileInfo>>
 
-            Test_all();
+            //Test_all();
 
             //var mackay = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\MacKay MTL\\RPOPP7167 Philip E Layton Quote.pdf"));
             //Debugger.Break();
+            //var yaldei = Parse_form(new FileInfo("C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Yaldei/delivery_Yaldei.pdf"));
+            //Debugger.Break();
 
-            foreach (var jobFolder in validFolders.Where(d=>d.Name.ToLower().Contains("yaldei")))
-                Edit_html(jobFolder.Name);
+            //Get_pdfForms();
+
+            // 21 invoices
+            var invoices = new Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, double, double, double>>();
+            foreach (var jobFolder in validFolders)
+                foreach (var invoiceFiles in Get_invoiceSummary(jobFolder))
+                    invoices.Add(invoiceFiles.Key, invoiceFiles.Value);
+
             Debugger.Break();
 
         }
-        internal void Edit_html(string folder)
+        private static Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, double, double, double>> Get_invoiceSummary(DirectoryInfo billing)
         {
+            var invoices = new Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, double, double, double>>();
+            var billingFiles = new List<FileInfo>(billing.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
+            if (billingFiles.Any())
+            {
+                foreach (var invoice in billingFiles)
+                {
+                    DateTime invoiceDate = DateTime.Now;
+                    DateTime startDate = DateTime.Now;
+                    DateTime endDate = DateTime.Now;
+                    double materials = 0;
+                    double labour = 0;
+                    double total = 0;
+                    try
+                    {
+                        using (PdfDocument document = PdfDocument.Open(invoice.FullName))
+                        {
+                            // 20[0-9]{2}-[01][0-9]-[0-3][0-9]
+                            foreach (Page page in document.GetPages())
+                            {
+                                var words = new List<Word>(page.GetWords());
+                                SortWords(words);
+                                string pageText = string.Join(" ", words.Select(w => w.Text));
+                                if (pageText.Contains("Remit to: Sean Glover"))
+                                {
+                                    var lines = new List<string>();
+                                    var indexedWords = new Dictionary<int, Word>();
+                                    var words_byLine = new Dictionary<int, List<Word>>();
+                                    foreach (var word in words) indexedWords[indexedWords.Count] = word;
+                                    int lineCounter = 0;
+                                    while (indexedWords.Count > 0)
+                                    {
+                                        var wordsByLine = new List<KeyValuePair<int, Word>>
+                                            (indexedWords.Where(w => !(from x in indexedWords where w.Value.BoundingBox.Top < x.Value.BoundingBox.Bottom select x).Any()));
+                                        words_byLine[lineCounter] = new List<Word>();
+                                        foreach (var word in wordsByLine)
+                                        {
+                                            words_byLine[lineCounter].Add(word.Value);
+                                            indexedWords.Remove(word.Key);
+                                        }
+                                        lines.Add(string.Join(" ", words_byLine[lineCounter].Select(w => w.Text)));
+                                        lineCounter++;
+                                    }
+                                    pageText = string.Join(Environment.NewLine, lines);
+                                    var labourHead = words.Where(w => w.Text == "Location").First();
+                                    var labourWords = new List<Word>(words.Where(w => w.BoundingBox.Top < labourHead.BoundingBox.Bottom));
+                                    var labourDates = new List<DateTime>(labourWords.Where(w => DateTime.TryParse(w.Text, out DateTime xx)).Select(w => DateTime.Parse(w.Text)));
+                                    if (labourDates.Any())
+                                    {
+                                        startDate = labourDates.Min();
+                                        endDate = labourDates.Max();
+                                    }
+                                    string labourSection = string.Join(" ", labourWords.Select(w => w.Text));
+                                    bool okDate = DateTime.TryParse(lines[1].Split(' ')[1], out invoiceDate);
+                                    bool okMaterials = double.TryParse(Regex.Match(labourSection, "(?<=TOTAL MATERIALS) [0-9.]{1,}").Value, out materials);
+                                    bool okLabour = double.TryParse(Regex.Match(labourSection, "(?<=TOTAL LABOUR) [0-9.]{1,}").Value, out labour);
+                                    bool okTotal = double.TryParse(Regex.Match(labourSection, "(?<=TOTAL INVOICE) [0-9.]{1,}").Value, out total);
+                                    bool okAll = okMaterials & okLabour & okTotal;
+                                    //if (invoice.Name == "CarlyleElementary.pdf") Debugger.Break();
+                                    invoices[invoice] = Tuple.Create(pageText, invoiceDate, startDate, endDate, materials, labour, total);
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+            }
+            var files = new List<string>();
+            int fileIndex = 0;
+            DirectoryInfo jobFolder = null;
+            foreach (var invoiceFile in invoices.OrderBy(i => i.Value.Item2))
+            {
+                DirectoryInfo folder = invoiceFile.Key.Directory;
+                // C:\Users\SeanGlover\Desktop\Personal\FH\Jobs\Cadens Lighthouse <-- validFolders[0]
+                // C:\Users\SeanGlover\Desktop\Personal\FH\Jobs\Cadens Lighthouse <-- folder.. same but DirectoryInfo IEquatable doesn't work they way you'd expect
+                var folders = new List<string>(validFolders.Select(di => di.FullName));
+                while (!folders.Contains(folder.FullName)) folder = folder.Parent;
+                var billFolder = folder.CreateSubdirectory("billing"); // no harm even if it already exists
+                jobFolder = folder;
+                var v = invoiceFile.Value;
+                string guidPath = $"{billFolder}\\{Guid.NewGuid()}.pdf";
+                string newIndex = invoices.Count == 1 ? string.Empty : $"[{fileIndex}]";
+                string newPath = $"{billFolder}\\invoice_{folder.Name} {newIndex}_{v.Item2:yyyy-MM-dd}.pdf";
+                File.Move(invoiceFile.Key.FullName, guidPath);
+                File.Move(guidPath, newPath);
+                files.Add($"date {v.Item2:yyyy-MM-dd} start {v.Item3:yyyy-MM-dd} end {v.Item4:yyyy-MM-dd} MAT {v.Item5:N2} LBR {v.Item6:N2} TTL {v.Item7:N2}");
+                fileIndex++;
+            }
+            if (files.Any())
+                File.WriteAllText($"{jobsFolder}\\invoice_{jobFolder.Name}.txt", string.Join(Environment.NewLine, files));
+            return invoices;
+        }
+        internal void Edit_html(string folder, DateTime startDate, DateTime endDate, string contactTitle = "Program and services coordinator")
+        {
+            // get last delivery form in a folder and tie it back to the matching quote
             var directory = Get_directoryByName(folder);
             if (directory != null)
             {
                 var save = SaveAll_byType(directory);
                 var forms = Parse_forms(directory);
-
+                var invoices = Get_invoiceSummary(directory);
                 if (forms.Item3.Any())
                 {
                     string sourceIndexHTML = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\index.html";
@@ -90,67 +193,63 @@ namespace fhInventoryEditor
                     string sourceHtml = File.ReadAllText(sourceIndexHTML);
                     htmlEditor.LoadHtml(sourceHtml);
 
-                    var productsTable = forms.Item1;
-                    var contactsTable = forms.Item2;
-
-                    var paths = new List<FileInfo>(contactsTable.AsEnumerable.Select(f => $"{directory.FullName}\\{f["name"]}").Distinct().Select(fi => new FileInfo(fi)));
-                    paths.Sort((p1, p2) => p2.CreationTime.CompareTo(p1.CreationTime));
-                    var lastPath = paths.First();
-
-                    // 1] update the contact info
-                    var contactRows = new List<Table.Row>(contactsTable.AsEnumerable.Where(r => r["name"].ToString() == lastPath.Name));
-                    var contacts = contactRows.ToDictionary(k => k["key"].ToString(), v => v["value"].ToString());
-
-                    var ids = new Dictionary<string, string>
+                    var deliveryFiles = new List<FileInfo>(directory.EnumerateFiles("*delivery_*.pdf", SearchOption.TopDirectoryOnly));
+                    if (deliveryFiles.Any())
                     {
-                        { "Date", "documentDate" },
-                        { "Customer", "businessName" },
-                        { "Order#", "purchaseOrder" },
-                        { "Contact", "contactName" },
-                        { "Phone#", "contactPhone" },
-                        { "email", "contactEmail" },
-                        { "Address", "addressStreet" },
-                        { "City", "addressCity" },
-                        { "Province", "Provinces" },
-                        { "PostalCode", "addressPostalCode" },
-                    };
-                    Debugger.Break();
-                    string html = sourceHtml;
-                    foreach (var field in ids)
-                    {
-                        var contactNode = htmlEditor.GetElementbyId(ids[field.Key]);
-                        var query = new List<string>(contacts.Where(r => r.Key.Contains(field.Key)).Select(r => r.Value.Trim()));
-                        query.Sort((f1, f2) => f2.Length.CompareTo(f1.Length));
-                        if (query.Any())
+                        deliveryFiles.Sort((d1, d2) => d2.CreationTime.CompareTo(d1.CreationTime)); // last delivery
+                        var deliveryForm = Parse_form(deliveryFiles.Last());
+                        var orders = new List<Table.Row>(deliveryForm.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Order#"));
+                        string orderNbr = orders.Any() ? orders[0]["value"].ToString() : string.Empty;
+
+                        // P0810161 - NSOPP5357, Order#      |P0810161 - revised #2
+                        var quoteFiles = new List<FileInfo>(directory.EnumerateFiles("*quote_*.pdf", SearchOption.TopDirectoryOnly));
+                        quoteFiles.Sort((d1, d2) => d2.CreationTime.CompareTo(d1.CreationTime)); // last quote
+                        var quoteForms = new List<Tuple<Table, Document, Table>>();
+                        foreach (var quoteFile in quoteFiles)
+                            quoteForms.Add(Parse_form(quoteFile));
+
+                        #region" html data "
+                        /// there are 6 elements sourced from a delivery form, but only 4 are used in the web page ( rep and rep's email are not used )
+                        /// order#, customer, contact, and phone
+                        var businessName = ProperCase(deliveryForm.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Customer").Select(r => r["value"].ToString()).First());
+                        var contact_name = ProperCase(deliveryForm.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Contact").Select(r => r["value"].ToString()).First());
+                        var contact_phone = deliveryForm.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Phone#").Select(r => r["value"].ToString()).First();
+                        // ----------- these elements come from a quote form
+                        var address_street = string.Empty;
+                        var address_city = string.Empty;
+                        var address_province = string.Empty;
+                        var address_postal = string.Empty;
+                        var contact_email = string.Empty;
+                        var quoteOrders = new List<Tuple<Table, Document, Table>>(quoteForms.Where(qf => qf.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Order#" & r["value"].ToString().Contains(orderNbr)).Any()));
+                        if (quoteOrders.Any())
                         {
-                            string id = field.Value;
-                            string bestValue = query.First();
-
-                            if (field.Key == "Date")
-                            {
-                                var canParse = DateTime.TryParse(bestValue, out DateTime documentDate);
-                                if (canParse) bestValue = $"{documentDate:yyyy-MM-dd}";
-                            }
-
-                            if (field.Key.StartsWith("email"))
-                            {
-                                var subQuery = query.Where(q => !q.ToLowerInvariant().Contains("flaghouse"));
-                                if (subQuery.Any()) bestValue = subQuery.First();
-                                bestValue = bestValue.ToLowerInvariant();
-                            }
-
-                            if (field.Key == "Province")
-                            {
-                                foreach (var p in provinces)
-                                {
-                                    var option = htmlEditor.GetElementbyId(p.Item3);
-                                    option.Attributes.Remove("selected");
-                                    if (p.Item1 == bestValue)
-                                        option.SetAttributeValue("selected", "");
-                                }
-                            }
-                            htmlEditor.GetElementbyId(id)?.SetAttributeValue("value", bestValue);
+                            var contactTable = new Table();
+                            foreach (var quoteOrder in quoteOrders) contactTable.Merge(quoteOrder.Item3);
+                            address_street = ProperCase(string.Join(" ", contactTable.AsEnumerable.Where(r => r["key"].ToString().StartsWith("Address")).Select(r => r["value"].ToString())));
+                            address_city = ProperCase(contactTable.AsEnumerable.Where(r => r["key"].ToString() == "City").Select(r => r["value"].ToString()).First());
+                            address_province = provinces.Where(p => p.Item1 == ProperCase(contactTable.AsEnumerable.Where(r => r["key"].ToString() == "Province").Select(r => r["value"].ToString()).First())).First().Item3;
+                            address_postal = ProperCase(contactTable.AsEnumerable.Where(r => r["key"].ToString() == "PostalCode").Select(r => r["value"].ToString()).First());
+                            contact_email = ProperCase(contactTable.AsEnumerable.Where(r => r["key"].ToString() == "email-client").Select(r => r["value"].ToString()).First());
                         }
+                        else
+                            Debugger.Break(); // no matching order for the delivery form
+                        #endregion
+                        htmlEditor.GetElementbyId("documentDate").SetAttributeValue("value", $"{DateTime.Now:yyyy-MM-dd}");
+                        htmlEditor.GetElementbyId("businessName").SetAttributeValue("value", businessName);
+                        htmlEditor.GetElementbyId("purchaseOrder").SetAttributeValue("value", orderNbr);
+                        htmlEditor.GetElementbyId("contactName").SetAttributeValue("value", contact_name);
+                        htmlEditor.GetElementbyId("contactPhone").SetAttributeValue("value", contact_phone);
+                        htmlEditor.GetElementbyId("contactEmail").SetAttributeValue("value", contact_email);
+                        htmlEditor.GetElementbyId("contactTitle").SetAttributeValue("value", contactTitle);
+                        htmlEditor.GetElementbyId("businessName").SetAttributeValue("value", businessName);
+                        htmlEditor.GetElementbyId("addressStreet").SetAttributeValue("value", address_street);
+                        htmlEditor.GetElementbyId("addressCity").SetAttributeValue("value", address_city);
+                        var provs = new List<HtmlNode>(htmlEditor.GetElementbyId("Provinces").ChildNodes);
+                        var mkys = new List<HtmlNode>();
+                        foreach (var option in provs)
+                            option.Attributes.Remove("selected");
+                        htmlEditor.GetElementbyId(address_province).SetAttributeValue("selected", "\"\"");
+                        htmlEditor.GetElementbyId("addressPostalCode").SetAttributeValue("value", address_postal);
                     }
                     using (StreamWriter sw = new StreamWriter(destinationIndexHTML))
                         htmlEditor.Save(sw);
@@ -202,6 +301,17 @@ namespace fhInventoryEditor
             foreach (var sampleType in samples)
                 foreach (var pdf in sampleType.Value)
                     File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
+        }
+        private static List<FileInfo> Get_pdfForms(DocumentType docType = DocumentType.delivery, bool openFile = true)
+        {
+            var pdfForms = new List<FileInfo>();
+            foreach (var jobFolder in validFolders)
+                foreach (var jobFile in jobFolder.EnumerateFiles($"*{docType}_*.pdf"))
+                {
+                    pdfForms.Add(jobFile);
+                    if (openFile) Process.Start(jobFile.FullName);
+                }
+            return pdfForms;
         }
         private static void Test_all()
         {
@@ -559,16 +669,7 @@ namespace fhInventoryEditor
 
                         #region" words_thisPage "
                         List<Word> words = new List<Word>(page.GetWords());
-                        words.Sort((w1, w2) =>
-                        {
-                            int lvl1 = w2.BoundingBox.Bottom.CompareTo(w1.BoundingBox.Bottom);
-                            if (lvl1 != 0) return lvl1;
-                            else
-                            {
-                                int lvl2 = w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left);
-                                return lvl2;
-                            }
-                        });
+                        SortWords(words);
                         var wordDict = new Dictionary<int, Word>();
                         foreach (var word in words)
                             wordDict.Add(wordDict.Count, word);
@@ -803,10 +904,67 @@ namespace fhInventoryEditor
                                 double PLEASENOTE = new List<Word>(wordsAboveTable.Where(w => Regex.IsMatch(w.Text, "NOTE(R){0,1}:"))).FirstOrDefault().BoundingBox.Top;
                                 var wordsAboveDisclaimer = new List<Word>(wordsAboveTable.Where(w => w.BoundingBox.Bottom > PLEASENOTE));
                                 wordsContact.AddRange(wordsAboveDisclaimer.Where(w => w.BoundingBox.Top < VERIFICATION));
-                                contacts = Get_contactKeysValues(wordsContact, col3_qtyLeft, 3); // <-- delivery forms have values floating above the line, so more margin needed
-                                var invalidKeys = new List<string>(contacts.Keys.Where(c => c.StartsWith("Address")));
-                                foreach (var invalidKey in invalidKeys) contacts.Remove(invalidKey);
-                                contacts.Remove("email-client");
+                                SortWords(wordsContact);
+
+                                #region" define two vertical lines in the contact region - leftside=right of colon, rightside=left of colon"
+                                var colons = new List<Word>(wordsContact.Where(w => w.Text.Contains(":")));
+                                var colonsRight = new List<Word>(colons.Where(w => (from x in colons where w.BoundingBox.Left > x.BoundingBox.Right select x).Any()));
+                                var colonsLeft = new List<Word>(colons.Except(colonsRight));
+                                
+                                var custContactRep_right = colonsLeft.Max(w => w.BoundingBox.Right);
+                                var orderPhoneEmail_left = colonsRight.Min(w => w.BoundingBox.Left);
+                                colons.AddRange(wordsContact.Where(w => w.BoundingBox.Left < custContactRep_right)); // FH Rep: or Flaghouse Rep: will include FH/Flaghouse
+                                colons = colons.Distinct().ToList();
+                                #endregion
+
+                                #region" line1 - top "
+                                var line1 = wordsContact.Where(w => w.Text.Trim().ToLower().Contains("client") | w.Text.Trim().ToLower().Contains("customer")).First().BoundingBox;
+                                var wordsLine1 = new List<Word>(wordsContact.Where(w => w.BoundingBox.Bottom >= line1.Bottom));
+                                var wordsLine1Right = new List<Word>(wordsLine1.Where(w => w.BoundingBox.Left > orderPhoneEmail_left).Except(colons));
+                                var wordsLine1Left = new List<Word>(wordsLine1.Except(wordsLine1Right).Except(colons));
+                                //------------------------------
+                                string customer = string.Join(" ", wordsLine1Left.Select(w => w.Text)).Trim();
+                                string order = string.Join(" ", wordsLine1Right.Select(w => w.Text)).Trim();
+                                #endregion
+                                
+                                foreach (var line1Word in wordsLine1) wordsContact.Remove(line1Word);
+                                
+                                #region" line3 - bottom "
+                                SortWords(wordsContact);
+                                var wordsLines_2_3 = new List<Word>(wordsContact.Except(colons));
+                                var wordsLine3 = new List<Word>(wordsLines_2_3.Where(w => (from x in wordsLines_2_3 where w.BoundingBox.Top < x.BoundingBox.Bottom select x).Any()));
+                                var wordsLine3Right = new List<Word>(wordsLine3.Where(w => w.BoundingBox.Left > orderPhoneEmail_left).Except(colons));
+                                var wordsLine3Left = new List<Word>(wordsLine3.Where(w => w.BoundingBox.Left > custContactRep_right).Except(wordsLine3Right).Except(colons));
+                                //------------------------------
+                                string rep = string.Join(" ", wordsLine3Left.Select(w => w.Text)).Trim();
+                                string email = string.Join(" ", wordsLine3Right.Select(w => w.Text)).Trim();
+                                #endregion
+
+                                foreach (var line1Word in wordsLine3.Union(colons)) wordsContact.Remove(line1Word);
+
+                                #region" line 2 - middle "
+                                var wordsLine2Right = new List<Word>(wordsContact.Where(w => w.BoundingBox.Left > orderPhoneEmail_left));
+                                var wordsLine2Left = new List<Word>(wordsContact.Except(wordsLine2Right));
+                                //------------------------------
+                                string contact = string.Join(" ", wordsLine2Left.Select(w => w.Text)).Trim();
+                                string phone = string.Join(" ", wordsLine2Right.Select(w => w.Text)).Trim();
+                                #endregion
+
+                                contacts = new Dictionary<string, string>
+                                {
+                                    {"Customer", customer },
+                                    {"Order#", order },
+                                    {"Contact", contact },
+                                    {"Phone#", phone },
+                                    {"Rep", rep },
+                                    {"email", email },
+                                };
+                                //File.WriteAllText($"C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\{Guid.NewGuid()}_contacts.txt", JsonConvert.SerializeObject(contacts, Formatting.Indented));
+                                //Debugger.Break();
+                                //contacts = Get_contactKeysValues(wordsContact, col3_qtyLeft, 3); // <-- delivery forms have values floating above the line, so more margin needed
+                                //var invalidKeys = new List<string>(contacts.Keys.Where(c => c.StartsWith("Address")));
+                                //foreach (var invalidKey in invalidKeys) contacts.Remove(invalidKey);
+                                //contacts.Remove("email-client");
                             }
                             if (documentTypeLanguage.type == DocumentType.quote)
                             {
@@ -952,6 +1110,16 @@ namespace fhInventoryEditor
                 return Tuple.Create(itemTable, documentTypeLanguage, contactsTable);
             }
         }
+        private static void SortWords(List<Word> words)
+        {
+            words.Sort((w1, w2) =>
+            {
+                int lvl1 = LineNbr_round(w2.BoundingBox.Bottom).CompareTo(LineNbr_round(w1.BoundingBox.Bottom));
+                if (lvl1 != 0) return lvl1;
+                int lvl2 = w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left);
+                return lvl2;
+            });
+        }
         private const byte roundFactor = 1;
         private static double LineNbr_round(double Y)=>  Math.Round(Math.Round(Y / roundFactor, 0) * roundFactor);
         internal static Dictionary<string, string> Get_contactKeysValues(Dictionary<double, Dictionary<byte, Dictionary<int, Letter>>> lines, double col3_qtyLeft)
@@ -984,13 +1152,7 @@ namespace fhInventoryEditor
         private static Dictionary<string, string> Get_contactKeysValues(List<Word> words, double col3_qtyLeft, byte margin)
         {
             var keysAndValues = new Dictionary<string, string>();
-            words.Sort((w1, w2) =>
-            {
-                int lvl1 = w2.BoundingBox.Bottom.CompareTo(w1.BoundingBox.Bottom);
-                if (lvl1 != 0) return lvl1;
-                int lvl2 = w2.BoundingBox.Left.CompareTo(w1.BoundingBox.Left);
-                return lvl2;
-            });
+            SortWords(words);
             double lineHeight = words.Average(w => w.BoundingBox.Height);
             var words_byLine = new Dictionary<byte, List<Word>>();
             foreach (var word in words)
@@ -1183,7 +1345,7 @@ namespace fhInventoryEditor
             var words = phraseIn.Trim().Split(' ');
             foreach (var word in words)
             {
-                if (Regex.Split(word, "[^a-z]{1,}", RegexOptions.IgnoreCase).Length == 1)
+                if (Regex.Split(word, "[^a-zâêîôûàèìòùëïüçé]{1,}", RegexOptions.IgnoreCase).Length == 1)
                     propercase.Add($"{word.Substring(0, 1).ToUpperInvariant()}{word.Substring(1, word.Length - 1).ToLowerInvariant()}");
                 else
                 {
