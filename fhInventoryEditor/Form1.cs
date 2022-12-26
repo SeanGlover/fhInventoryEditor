@@ -69,14 +69,16 @@ namespace fhInventoryEditor
 
             //Get_pdfForms();
 
-            // 21 invoices
+            // 53 invoices
             var invoices = new Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, double, double, double>>();
+            var totalPaid = new Dictionary<int, string>();
             foreach (var jobFolder in validFolders)
-                foreach (var invoiceFiles in Get_invoiceSummary(jobFolder))
-                    invoices.Add(invoiceFiles.Key, invoiceFiles.Value);
-
+                foreach (var invoiceFile in Get_invoiceSummary(jobFolder))
+                {
+                    invoices.Add(invoiceFile.Key, invoiceFile.Value);
+                    totalPaid.Add(totalPaid.Count, $"{invoiceFile.Key.Name} Date {invoiceFile.Value.Item2:yyyy-MM-dd} Total {invoiceFile.Value.Item7:N2}");
+                }
             Debugger.Break();
-
         }
         private static Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, double, double, double>> Get_invoiceSummary(DirectoryInfo billing)
         {
