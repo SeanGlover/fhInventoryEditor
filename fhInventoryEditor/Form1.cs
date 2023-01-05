@@ -293,6 +293,9 @@ namespace fhInventoryEditor
             ttls_ByYear = ttls_ByYear.OrderByDescending(k => k.Key).Take(5).ToDictionary(k => k.Key, v => v.Value.ToDictionary(kk => kk.Key, vv => Math.Round(vv.Value, 2)));
             var revn_byYear = ttls_ByYear.ToDictionary(k => k.Key, v => Math.Round(v.Value.Values.Sum(), 2));
             var avg_5yrRevn = Math.Round((6000 + revn_byYear.Values.Sum()) / revn_byYear.Count, 2);
+
+            // 12653.26 / year => 25K gross
+
             Debugger.Break();
         }
         internal static void Get_imbalances(bool openFile = true)
