@@ -18,7 +18,6 @@ using System.Net;
 using System.Net.Mail;
 using HtmlAgilityPack;
 using System.Globalization;
-using DocumentFormat.OpenXml.ExtendedProperties;
 
 namespace fhInventoryEditor
 {
@@ -41,7 +40,11 @@ namespace fhInventoryEditor
         public enum PageRegion { none, contact, table_disclaimer, table_hdr, table_data, footer }
         public enum DocumentType { none, quote, delivery, invoice }
         public enum DocumentLanguage { none, english, french }
-        public struct Document
+        public struct ClientForm
+        {
+
+        }
+        public struct XXX
         {
             public DocumentType type;
             public DocumentLanguage language;
@@ -243,7 +246,7 @@ namespace fhInventoryEditor
 
             //Get_pdfForms();
 
-            Get_stats();
+            Edit_html("centrelecap");
             Debugger.Break();
 
             //var testFolder = Get_invoices(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\JulesLeger"));
@@ -253,7 +256,7 @@ namespace fhInventoryEditor
         }
         internal static void Get_stats()
         {
-            const byte nbrYears = 8;
+            const byte nbrYears = 5;
             var startTime = DateTime.Now;
             var allTables = new Table();
             var invoices = new List<Invoice>(Get_invoices().Where(i => i.Date.AddYears(nbrYears) >= DateTime.Now));
@@ -294,8 +297,14 @@ namespace fhInventoryEditor
             var revn_byYear = ttls_ByYear.ToDictionary(k => k.Key, v => Math.Round(v.Value.Values.Sum(), 2));
             var avg_5yrRevn = Math.Round((6000 + revn_byYear.Values.Sum()) / revn_byYear.Count, 2);
 
-            // 12653.26 / year => 25K gross
-
+            // average
+            // 5 year history knowing some records are missing (Opitciwan * 2, etc)
+            //  1,124.17 -->    hours worked -225 hours each year or 6 weeks full time
+            //  5,434.92 -->    all mileage                             -  1,087 / yr
+            //  9,903.27 -->    all expenses gravy (20% of purchased)   -  1,981 / yr
+            // 52,930.20 -->    labour paid                             - 10,586 / yr
+            // ==========
+            // 68,268.39 -->    all earnings                            - 13,654 / yr --> 25k gross
             Debugger.Break();
         }
         internal static void Get_imbalances(bool openFile = true)
@@ -399,9 +408,10 @@ namespace fhInventoryEditor
             var get_pageWords = Get_pageWords(page);
             return get_pageWords == null ? null : get_pageWords.ToDictionary(k => k.Key, v => string.Join(" ", v.Value.Select(w => w.Text)));
         }
-        internal void Edit_html(string folder, DateTime startDate, DateTime endDate, string contactTitle = "Program and services coordinator")
+        internal void Edit_html(string folder, string contactTitle = "Program and services coordinator")
         {
-            // get last delivery form in a folder and tie it back to the matching quote
+            // get last delivery form in a folder and tie it back to the matching quote AND invoice
+            // 
             var directory = Get_directoryByName(folder);
             if (directory != null)
             {
@@ -432,7 +442,7 @@ namespace fhInventoryEditor
                         // P0810161 - NSOPP5357, Order#      |P0810161 - revised #2
                         var quoteFiles = new List<FileInfo>(directory.EnumerateFiles("*quote_*.pdf", SearchOption.TopDirectoryOnly));
                         quoteFiles.Sort((d1, d2) => d2.CreationTime.CompareTo(d1.CreationTime)); // last quote
-                        var quoteForms = new List<Tuple<Table, Document, Table>>();
+                        var quoteForms = new List<Tuple<Table, XXX, Table>>();
                         foreach (var quoteFile in quoteFiles)
                             quoteForms.Add(Parse_form(quoteFile));
 
@@ -448,7 +458,7 @@ namespace fhInventoryEditor
                         var address_province = string.Empty;
                         var address_postal = string.Empty;
                         var contact_email = string.Empty;
-                        var quoteOrders = new List<Tuple<Table, Document, Table>>(quoteForms.Where(qf => qf.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Order#" & r["value"].ToString().Contains(orderNbr)).Any()));
+                        var quoteOrders = new List<Tuple<Table, XXX, Table>>(quoteForms.Where(qf => qf.Item3.AsEnumerable.Where(r => r["key"].ToString() == "Order#" & r["value"].ToString().Contains(orderNbr)).Any()));
                         if (quoteOrders.Any())
                         {
                             var contactTable = new Table();
@@ -460,7 +470,26 @@ namespace fhInventoryEditor
                             contact_email = ProperCase(contactTable.AsEnumerable.Where(r => r["key"].ToString() == "email-client").Select(r => r["value"].ToString()).First());
                         }
                         else
-                            Debugger.Break(); // no matching order for the delivery form
+                        {
+                            /// no matching order for the delivery form
+                            /// confirmed for CentreLeCap-
+                            /// no connection between the Quote pdf  "Reference #: P0914839"
+                            /// and the Delivery pdf                 "Order:	P0917654 / P0927227"
+                            /// but the two ARE connected as the equipment on the delivery closely matches the quote
+
+                            var hitRates = new List<Tuple<double, ClientForm>>();
+                            foreach (var quoteForm in quoteForms)
+                            {
+                                var codesQuoted = new List<string>(quoteForm.Item1.Columns["item"].Values.Select(i => i.Value.ToString()));
+                                var codesDelivered = new List<string>(deliveryForm.Item1.Columns["item"].Values.Select(i => i.Value.ToString()));
+                                var codesCommon = new List<string>(codesQuoted.Intersect(codesDelivered));
+                                var hitRate = new double[] { 1, codesCommon.Count }.Max() / new double[] { codesQuoted.Count, codesDelivered.Count }.Min();
+                                Debugger.Break();
+                            }
+                            Debugger.Break();
+
+                        }
+                        Debugger.Break();
                         #endregion
                         htmlEditor.GetElementbyId("documentDate").SetAttributeValue("value", $"{DateTime.Now:yyyy-MM-dd}");
                         htmlEditor.GetElementbyId("businessName").SetAttributeValue("value", businessName);
@@ -530,7 +559,7 @@ namespace fhInventoryEditor
                 foreach (var pdf in sampleType.Value)
                     File.Copy(pdf.FullName, $"{samplesFolder}{pdf.Name}", true);
         }
-        private static List<FileInfo> Get_pdfForms(DocumentType docType = DocumentType.delivery, bool openFile = true)
+        internal static List<FileInfo> Get_pdfForms(DocumentType docType = DocumentType.delivery, bool openFile = true)
         {
             var pdfForms = new List<FileInfo>();
             foreach (var jobFolder in validFolders)
@@ -541,7 +570,7 @@ namespace fhInventoryEditor
                 }
             return pdfForms;
         }
-        private static void Test_all()
+        internal static void Test_all()
         {
             //var form = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Centre Evasion/quote_Centre Evasion [0].pdf"));
             //Debugger.Break();
@@ -559,7 +588,7 @@ namespace fhInventoryEditor
             TimeSpan elapsed = endTime - startTime;
             Debugger.Break();
         }
-        private void Testing()
+        internal void Testing()
         {
             //var form = Parse_form(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Prescott Russell_Hawkesbury/delivery_Prescott Russell_Hawkesbury.pdf"));
             //Debugger.Break();
@@ -618,7 +647,7 @@ namespace fhInventoryEditor
             }
             Debugger.Break();
         }
-        private void Addresses()
+        internal void Addresses()
         {
             var stringOfAddresses = "Dolbeau, Mistassini, Québec G8L 2V4\r\nDolbeau Mistassini, QC G8L 2V4\r\nOTTAWA, ON K1Z 6R8 CANADA\r\nMONTREAL, QC H4B 1B7 CANADA\r\nOTTAWA, ON K1L 8H2 CANADA\r\nL'ORIGNAL, ON K0B 1K0 CANADA\r\nDOLBEAU MISTASSINI, QC G8L 2V4\r\nOTTAWA, ON K1Z 6R8 C\r\nMONTREAL, QC H3T 1B1 CANADA\r\nMONTREAL, QC H3R 2G3\r\nMONTREAL, QC H3W 1J6 CANADA";
             List<string> addresses = new List<string>(stringOfAddresses.Split(new string[] { Environment.NewLine }, StringSplitOptions.None));
@@ -738,7 +767,7 @@ namespace fhInventoryEditor
             }
             return moves;
         }
-        private static Document Get_documentTypeLanguage(FileInfo pdfinfo)
+        private static XXX Get_documentTypeLanguage(FileInfo pdfinfo)
         {
             string[] keyDeliveryWords = new string[]
             {
@@ -748,7 +777,7 @@ namespace fhInventoryEditor
                 "Delivery Verification Form"
             };
             var documentPages = Get_pdfText(pdfinfo);
-            if (documentPages == null) return new Document() { language = DocumentLanguage.none, type = DocumentType.none };
+            if (documentPages == null) return new XXX() { language = DocumentLanguage.none, type = DocumentType.none };
             var documentText = string.Join(Environment.NewLine, documentPages.Values);
             
             // quote match MUST be first as the quote contains the delivery disclaimer statement, but delivery forms DON'T have QUOTE#/SOUMISSION
@@ -756,18 +785,18 @@ namespace fhInventoryEditor
             if (quoteMatch.Success)
             {
                 var quoteLanguage = Regex.IsMatch(quoteMatch.Value, "SOUMISSION {0,1}#:") ? DocumentLanguage.french : DocumentLanguage.english;
-                return new Document() { language = quoteLanguage, type = DocumentType.quote };
+                return new XXX() { language = quoteLanguage, type = DocumentType.quote };
             }
             
             var dlvryMatch = Regex.Match(documentText, $"({string.Join("|", keyDeliveryWords)})", RegexOptions.IgnoreCase);
             if (dlvryMatch.Success)
             {
                 var deliveryLanguage = Regex.IsMatch(dlvryMatch.Value, $"({string.Join("|", keyDeliveryWords.Take(2))})") ? DocumentLanguage.french : DocumentLanguage.english;
-                return new Document() { language = deliveryLanguage, type = DocumentType.delivery };
+                return new XXX() { language = deliveryLanguage, type = DocumentType.delivery };
             }
 
             var noneLanguage = Regex.IsMatch(documentText, "[àâçéèêëîïôûùüÿñæœ]", RegexOptions.IgnoreCase) ? DocumentLanguage.french : DocumentLanguage.english;
-            return new Document() { language = noneLanguage, type = DocumentType.none };
+            return new XXX() { language = noneLanguage, type = DocumentType.none };
         }
         private static Dictionary<int, string> Get_pdfText(FileInfo pdfinfo)
         {
@@ -838,9 +867,9 @@ namespace fhInventoryEditor
             }
             return Tuple.Create(folderTable, contactsTable, files);
         }
-        private static Tuple<Table, Document, Table> Parse_form(FileInfo jobinfo, bool openFile = false)
+        private static Tuple<Table, XXX, Table> Parse_form(FileInfo jobinfo, bool openFile = false)
         {
-            if (jobinfo == null) return Tuple.Create(new Table(), new Document(), new Table());
+            if (jobinfo == null) return Tuple.Create(new Table(), new XXX(), new Table());
             else
             {
                 if (openFile) Process.Start($"{jobinfo.FullName}");
