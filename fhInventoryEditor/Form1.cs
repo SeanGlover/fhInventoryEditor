@@ -47,7 +47,178 @@ namespace fhInventoryEditor
             public DocumentLanguage language;
             public override string ToString() => $"{type} [{language}]";
         }
-        internal enum InvoiceSection { none, materials, labour, totals }
+        internal enum InvoiceSection { none, expense, labour, totals }
+        public struct Invoice
+        {
+            public bool Valid { get; }
+            public string Name { get; }
+            public FileInfo Path { get; }
+            public DateTime Date { get; }
+            public DateTime Date_begin { get; }
+            public DateTime Date_end { get; }
+            public Table Table { get; }
+            public double Total_costs { get; }
+            public double Total_labour { get; }
+            public double Total_hours { get; }
+            public double Total { get; }
+            public double Hourly_rate { get; }
+            public double Total_calc { get; }
+            public double Out => Math.Round(Total - Total_calc, 2);
+            public bool Balances => Out == 0;
+            public string Text { get; }
+            public Invoice(FileInfo invoice)
+            {
+                Valid = false;
+                Name = invoice.Name;
+                Path = invoice;
+                Date = new DateTime();
+                Date_begin = new DateTime();
+                Date_end = new DateTime();
+                Total_costs = 0;
+                Total_labour = 0;
+                Total_hours = 0;
+                Total = 0;
+                Hourly_rate = 0;
+                Total_calc = 0;
+                Text = null;
+
+                Table = new Table();
+                var col0 = new Table.Column("path", typeof(string));
+                var col1 = new Table.Column("date", typeof(DateTime));
+                var col2 = new Table.Column("At", typeof(string));
+                var col3 = new Table.Column("type", typeof(string));
+                var col4 = new Table.Column("code", typeof(string));
+                var col5 = new Table.Column("text", typeof(string));
+                var col6 = new Table.Column("qty", typeof(double));
+                var col7 = new Table.Column("unit", typeof(double));
+                var col8 = new Table.Column("ext_pdf", typeof(double));
+                var col9 = new Table.Column("ext_calc", typeof(double));
+                Table.Columns.AddRange(new Table.Column[] { col0, col1, col2, col3, col4, col5, col6, col7, col8, col9 });
+
+                try
+                {
+                    using (PdfDocument document = PdfDocument.Open(invoice.FullName))
+                    {
+                        var dateFormats = new[] { "MM/d/yyyy", "MM/dd/yyyy", "d-MMM-yy", "dd-MMM-yy", "yyyy-MM-dd" };
+                        var section = new InvoiceSection();
+                        PdfRectangle typeColumn = default;
+                        PdfRectangle gstColumn = default;
+                        foreach (Page page in document.GetPages())
+                        {
+                            var words = new List<Word>(page.GetWords());
+                            SortWords(words);
+                            var words_byLine = Get_pageWords(page);
+                            var text_byLine = words_byLine.ToDictionary(k => k.Key, v => string.Join(" ", v.Value.Select(w => w.Text)));
+                            Text = string.Join(Environment.NewLine, text_byLine.Values);
+                            if (page.Number == 1)
+                            {
+                                // first page MUST have "Remit to: Sean Glover", otherwise it is not a pdf invoice
+                                if (Text.Contains("Remit to: Sean Glover"))
+                                {
+                                    DateTime.TryParse(words_byLine[1][1].Text, out DateTime invoiceDate); // second line, second word
+                                    Date = invoiceDate;
+                                    Valid = true;
+                                }
+                                else
+                                {
+                                    //Debugger.Break();
+                                    break;
+                                }
+                            }
+                            foreach (var stringOfWords in words_byLine.Values)
+                            {
+                                string line = string.Join("|", stringOfWords.Select(w => w.Text));
+                                Word firstWord = stringOfWords.First();
+                                if (stringOfWords.Count == 1)
+                                {
+                                    if (firstWord.Text.ToLowerInvariant() == "expenses") section = InvoiceSection.expense;
+                                    if (firstWord.Text.ToLowerInvariant() == "labour") section = InvoiceSection.labour;
+                                }
+                                if (line.ToLowerInvariant() == "time|&|materials") section = InvoiceSection.totals;
+                                if (DateTime.TryParseExact(firstWord.Text, dateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date))
+                                {
+                                    var col2_site = new List<Word>(stringOfWords.Skip(1).Where(w => w.BoundingBox.Right < typeColumn.Left));
+                                    var col3_code = new List<Word>(stringOfWords.Skip(1).Where(w => w.BoundingBox.IntersectsWith(typeColumn)));
+                                    var col4_desc = new List<Word>(stringOfWords.Skip(1).Where(w => w.BoundingBox.Left > typeColumn.Right & w.BoundingBox.Right < gstColumn.Left));
+                                    var location = string.Join(" ", col2_site.Select(w => w.Text));
+                                    var code = col3_code.First().Text;
+                                    var description = string.Join(" ", col4_desc.Select(w => w.Text));
+                                    var numbers = new List<double>();
+                                    foreach (var word in stringOfWords.Skip(stringOfWords.Count - 3))
+                                    {
+                                        var isNumber = double.TryParse(word.Text, NumberStyles.Currency, culture, out double number);
+                                        numbers.Add(number);
+                                    }
+                                    var qty = Math.Round(numbers[0], 2);
+                                    var unit = Math.Round(numbers[1], 2);
+                                    var ext_pdf = Math.Round(numbers[2], 2);
+                                    var ext_calc = Math.Round(qty * unit, 2);
+                                    //if (Math.Abs(ext_calc - ext_pdf) >= 2.0) Debugger.Break(); // out more than 2$
+                                    Table.Rows.Add(new object[] { invoice.Name, date, location, section.ToString(), code, description, qty, unit, ext_pdf, ext_calc });
+                                }
+                                else if (typeColumn.Area == 0)
+                                {
+                                    var typeWords = new List<Word>(stringOfWords.Where(w => w.Text.ToLower() == "type"));
+                                    var gstWords = new List<Word>(stringOfWords.Where(w => w.Text.ToLower() == "gst"));
+                                    if (typeWords.Any())
+                                    {
+                                        var typeBounds = typeWords.First().BoundingBox;
+                                        var gstBounds = gstWords.First().BoundingBox;
+                                        typeColumn = new PdfRectangle(typeBounds.Left, 0, typeBounds.Right, page.CropBox.Bounds.Height);
+                                        gstColumn = new PdfRectangle(gstBounds.Left, 0, gstBounds.Right, page.CropBox.Bounds.Height);
+                                    }
+                                }
+                                else if (section == InvoiceSection.totals & line.ToLowerInvariant() != "time|&|materials")
+                                {
+                                    // summary section
+                                    var isNumber = double.TryParse(line.Split('|').Last(), out double total);
+                                    if (Regex.IsMatch(line, "total[|]invoice", RegexOptions.IgnoreCase))
+                                    {
+                                        section = InvoiceSection.none;
+                                        Total = total;
+                                        break;
+                                    }
+                                    if (Regex.IsMatch(line, "(total ){0,1}(materials|expenses|labour)", RegexOptions.IgnoreCase))
+                                    {
+                                        //if (total == 0) Debugger.Break();
+                                        if (Regex.IsMatch(line, "expenses|total materials", RegexOptions.IgnoreCase))
+                                            Total_costs = total;
+                                        else
+                                            Total_labour = total;
+                                    }
+                                }
+                            }
+                            var rowsExpense = new List<Table.Row>(Table.AsEnumerable.Where(r => r["type"].ToString() == "expense"));
+                            var rowsLabour = new List<Table.Row>(Table.AsEnumerable.Where(r => r["type"].ToString() == "labour"));
+                            var workDates = new List<DateTime>(rowsLabour.Select(r => (DateTime)r["date"]));
+                            if (workDates.Any())
+                            {
+                                Date_begin = workDates.Min();
+                                Date_end = workDates.Max();
+                            }
+                            if (rowsExpense.Any())
+                            {
+
+                            }
+                            if (rowsLabour.Any())
+                            {
+                                Hourly_rate = rowsLabour.Average(r => (double)r["unit"]);
+                                Total_hours = rowsLabour.Sum(r => (double)r["qty"]);
+                            }
+                            Total_calc = Math.Round(Table.AsEnumerable.Sum(r => (double)r["ext_calc"]), 2);
+                        }
+                    }
+                }
+                catch (PdfDocumentFormatException ex) { Console.WriteLine(ex.Message); }
+                catch (InvalidOperationException ex) { Console.WriteLine(ex.Message); }
+            }
+            public override string ToString()
+            {
+                var balances = Balances ? "Y" : "N";
+                var overUnder = Balances ? string.Empty : (Out > 0 ? " Over" : " Under") + $" {Out:N2}";
+                return $"{Name} Date {Date:yyyy-MM-dd} Total {Total:N2} Balances {balances}{overUnder}";
+            }
+        }
 
         private void Form1_Load(object sender, EventArgs e)
         {
@@ -72,157 +243,121 @@ namespace fhInventoryEditor
 
             //Get_pdfForms();
 
-            var invDate = DateTime.TryParse("2018-04-28", out DateTime monkey);
-            var opitciwan = Get_invoice(new FileInfo("C:/Users/SeanGlover/Desktop/Personal/FH/Jobs/Opitciwan QC/billing/invoice_Opitciwan QC _2018-04-28.pdf"));
-            // {(, 2023-01-02 7:41:07 PM, 2023-01-02 7:41:07 PM, 2023-01-02 7:41:07 PM, 0, 0, 0)}
+            Get_stats();
+            Debugger.Break();
 
-            // 53 invoices
-            var invoices = new Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, Table>>();
-            var totalPaid = new Dictionary<int, string>();
-            foreach (var jobFolder in validFolders)
-                foreach (var invoiceFile in Get_invoices(jobFolder))
-                {
-                    invoices.Add(invoiceFile.Key, invoiceFile.Value);
-                    totalPaid.Add(totalPaid.Count, $"{invoiceFile.Key.Name} Date {invoiceFile.Value.Item2:yyyy-MM-dd} Total {invoiceFile.Value.Item5.AsEnumerable.Sum(r => (double)r["ext_pdf"]):N2}");
-                    //if (invoiceFile.Value.Item7 == 0) Process.Start(invoiceFile.Key.FullName);
-                }
+            //var testFolder = Get_invoices(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\JulesLeger"));
+            //var inv = new Invoice(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Carlyle MTL\\billing\\invoice_Carlyle MTL [0]_2015-06-27.pdf"));
+
+
+        }
+        internal static void Get_stats()
+        {
+            const byte nbrYears = 8;
+            var startTime = DateTime.Now;
+            var allTables = new Table();
+            var invoices = new List<Invoice>(Get_invoices().Where(i => i.Date.AddYears(nbrYears) >= DateTime.Now));
+            invoices.Sort((i1, i2) => i1.Name.CompareTo(i2.Name));
+            foreach (var invoice in invoices)
+                allTables.Merge(invoice.Table);
+            var endTime = DateTime.Now;
+            var elapsed = endTime - startTime;
+            var summary = string.Join(Environment.NewLine, invoices.Select(i => i.ToString()));
+
+            var expenseRows = new List<Table.Row>(allTables.AsEnumerable.Where(r => r["type"].ToString() == "expense"));
+            var labourRows = new List<Table.Row>(allTables.AsEnumerable.Where(r => r["type"].ToString() == "labour"));
+            var expenseGroups = new Dictionary<string, List<Table.Row>>();
+            foreach (var row in expenseRows)
+            {
+                var code = row["code"].ToString();
+                if (!expenseGroups.ContainsKey(code)) expenseGroups[code] = new List<Table.Row>();
+                expenseGroups[code].Add(row);
+            }
+            var mileage = Math.Round(expenseGroups["T"].Where(r => r["at"].ToString().ToLower() == "mileage").Select(r => (double)r["ext_calc"]).Sum(), 2);
+            var expense = Math.Round(expenseRows.Select(r => (double)r["ext_calc"]).Sum(), 2);
+            var expGrvy = Math.Round((expense - mileage) * .2, 2) + mileage;
+            var hrsTime = Math.Round(labourRows.Select(r => (double)r["qty"]).Sum(), 2);
+            var hrsPaid = Math.Round(labourRows.Select(r => (double)r["ext_calc"]).Sum(), 2);
+            var ttlRcvd = Math.Round(hrsPaid + expGrvy, 2);
+            var ttlYear = Math.Round(ttlRcvd / nbrYears, 2);
+            var ttls_ByYear = new Dictionary<int, Dictionary<string, double>>();
+            foreach (var row in allTables.AsEnumerable)
+            {
+                var date = (DateTime)row["date"];
+                if (!ttls_ByYear.ContainsKey(date.Year))
+                    ttls_ByYear[date.Year] = new Dictionary<string, double> { { "hrs", 0 }, { "car", 0 }, { "exp", 0 } };
+                string type = row["type"].ToString().ToLower();
+                string subType = type == "expense" ? row["at"].ToString().ToLower() == "mileage" ? "car" : "exp" : "hrs";
+                ttls_ByYear[date.Year][subType] += (double)row["ext_calc"] * (subType == "exp" ? .2 : 1);
+            }
+            ttls_ByYear = ttls_ByYear.OrderByDescending(k => k.Key).Take(5).ToDictionary(k => k.Key, v => v.Value.ToDictionary(kk => kk.Key, vv => Math.Round(vv.Value, 2)));
+            var revn_byYear = ttls_ByYear.ToDictionary(k => k.Key, v => Math.Round(v.Value.Values.Sum(), 2));
+            var avg_5yrRevn = Math.Round((6000 + revn_byYear.Values.Sum()) / revn_byYear.Count, 2);
             Debugger.Break();
         }
-        private static Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, Table>> Get_invoices(DirectoryInfo invoiceFolder)
+        internal static void Get_imbalances(bool openFile = true)
         {
-            var invoices = new Dictionary<FileInfo, Tuple<string, DateTime, DateTime, DateTime, Table>>();
+            var startTime = DateTime.Now;
+            var allTables = new Table();
+            var invoices = new List<Invoice>(Get_invoices().Where(i => i.Date.AddYears(7) >= DateTime.Now));
+            invoices.Sort((i1, i2) => i1.Name.CompareTo(i2.Name));
+            var imbalances = new List<Invoice>(invoices.Where(i => Math.Abs(i.Out) > .5));
+            foreach (var invoice in imbalances)
+            {
+                allTables.Merge(invoice.Table);
+                if (openFile) Process.Start(invoice.Path.FullName);
+            }
+            var endTime = DateTime.Now;
+            var elapsed = endTime - startTime;
+            var summary = string.Join(Environment.NewLine, imbalances.Select(i => i.ToString()));
+            Debugger.Break();
+        }
+        private static List<Invoice> Get_invoices()
+        {
+            var invoices = new List<Invoice>();
+            foreach (var jobFolder in validFolders)
+                invoices.AddRange(Get_invoices(jobFolder));
+            return invoices;
+        }
+        private static List<Invoice> Get_invoices(DirectoryInfo invoiceFolder)
+        {
+            var invoices = new List<Invoice>();
             var invoiceFiles = new List<FileInfo>(invoiceFolder.EnumerateFiles("*.pdf", SearchOption.AllDirectories));
             if (invoiceFiles.Any())
             {
-                foreach (var invoice in invoiceFiles)
+                foreach (var invoiceFile in invoiceFiles)
                 {
-                    var summary = Get_invoice(invoice);
-                    invoices.Add(invoice, summary);
+                    var invoice = new Invoice(invoiceFile);
+                    if (invoice.Valid)
+                        invoices.Add(invoice);
+                    else { }
+                        //Debugger.Break();
                 }
             }
             var files = new List<string>();
             int fileIndex = 0;
             DirectoryInfo jobFolder = null;
-            foreach (var invoiceFile in invoices.OrderBy(i => i.Value.Item2))
+            foreach (var invoice in invoices.OrderBy(i => i.Date))
             {
-                DirectoryInfo folder = invoiceFile.Key.Directory;
+                DirectoryInfo folder = invoice.Path.Directory;
                 // C:\Users\SeanGlover\Desktop\Personal\FH\Jobs\Cadens Lighthouse <-- validFolders[0]
                 // C:\Users\SeanGlover\Desktop\Personal\FH\Jobs\Cadens Lighthouse <-- folder.. same but DirectoryInfo IEquatable doesn't work they way you'd expect
                 var folders = new List<string>(validFolders.Select(di => di.FullName));
                 while (!folders.Contains(folder.FullName)) folder = folder.Parent;
                 var billFolder = folder.CreateSubdirectory("billing"); // no harm even if it already exists
                 jobFolder = folder;
-                var v = invoiceFile.Value;
                 string guidPath = $"{billFolder}\\{Guid.NewGuid()}.pdf";
-                string newIndex = invoices.Count == 1 ? string.Empty : $"[{fileIndex}]";
-                string newPath = $"{billFolder}\\invoice_{folder.Name} {newIndex}_{v.Item2:yyyy-MM-dd}.pdf";
-                File.Move(invoiceFile.Key.FullName, guidPath);
+                string newIndex = invoices.Count == 1 ? string.Empty : $" [{fileIndex}]";
+                string newPath = $"{billFolder}\\invoice_{folder.Name}{newIndex}_{invoice.Date:yyyy-MM-dd}.pdf";
+                File.Move(invoice.Path.FullName, guidPath);
                 File.Move(guidPath, newPath);
                 //files.Add($"date {v.Item2:yyyy-MM-dd} start {v.Item3:yyyy-MM-dd} end {v.Item4:yyyy-MM-dd} MAT {v.Item5:N2} LBR {v.Item6:N2} TTL {v.Item7:N2}");
                 fileIndex++;
             }
             if (files.Any())
                 File.WriteAllText($"{jobsFolder}\\invoice_{jobFolder.Name}.txt", string.Join(Environment.NewLine, files));
+            //Debugger.Break();
             return invoices;
-        }
-        private static Tuple<string, DateTime, DateTime, DateTime, Table> Get_invoice(FileInfo invoice)
-        {
-            var dateFormats = new[] { "dd-MMM-yy", "yyyy-MM-dd" };
-            string pageText = null;
-            var invoiceDate = DateTime.MinValue;
-            var startDate = DateTime.MinValue;
-            var endDate = DateTime.MinValue;
-            var xlsm = new Table();
-            var col1 = new Table.Column("date", typeof(DateTime));
-            var col2 = new Table.Column("At", typeof(string));
-            var col3 = new Table.Column("type", typeof(string));
-            var col4 = new Table.Column("code", typeof(string));
-            var col5 = new Table.Column("text", typeof(string));
-            var col6 = new Table.Column("qty", typeof(double));
-            var col7 = new Table.Column("unit", typeof(double));
-            var col8 = new Table.Column("ext_pdf", typeof(double));
-            var col9 = new Table.Column("ext_calc", typeof(double));
-            xlsm.Columns.AddRange(new Table.Column[] { col1, col2, col3, col4, col5, col6, col7, col8, col9 });
-
-            using (PdfDocument document = PdfDocument.Open(invoice.FullName))
-            {
-                // 20[0-9]{2}-[01][0-9]-[0-3][0-9]
-                var section = new InvoiceSection();
-                PdfRectangle typeColumn = default;
-                PdfRectangle gstColumn = default;
-                foreach (Page page in document.GetPages())
-                {
-                    var words = new List<Word>(page.GetWords());
-                    SortWords(words);
-                    var words_byLine = Get_pageWords(page);
-                    var text_byLine = words_byLine.ToDictionary(k => k.Key, v => string.Join(" ", v.Value.Select(w => w.Text)));
-                    pageText = string.Join(Environment.NewLine, text_byLine.Values);
-                    if (pageText.Contains("Remit to: Sean Glover"))
-                        DateTime.TryParse(words_byLine[1][1].Text, out invoiceDate); // second line, second word
-
-                    foreach (var stringOfWords in words_byLine.Values)
-                    {
-                        string line = string.Join("|", stringOfWords.Select(w => w.Text));
-                        Word firstWord = stringOfWords.First();
-                        if (stringOfWords.Count == 1)
-                        {
-                            if (firstWord.Text.ToLowerInvariant() == "expenses") section = InvoiceSection.materials;
-                            if (firstWord.Text.ToLowerInvariant() == "labour") section = InvoiceSection.labour;
-                        }
-                        if (line.ToLowerInvariant() == "time|&|materials") section = InvoiceSection.totals;
-                        if (DateTime.TryParseExact(firstWord.Text, dateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date))
-                        {
-                            var col2Words = new List<Word>(stringOfWords.Skip(1).Where(w => w.BoundingBox.Left < typeColumn.Left));
-                            var col4Words = new List<Word>(stringOfWords.Skip(1).Where(w => w.BoundingBox.Left > typeColumn.Right & w.BoundingBox.Right < gstColumn.Left));
-                            var location = string.Join(" ", col2Words.Select(w => w.Text));
-                            var code = stringOfWords.Where(w => typeColumn.Contains(w.BoundingBox)).First().Text;
-                            var description = string.Join(" ", col4Words.Select(w => w.Text));
-                            var numbers = new List<double>();
-                            foreach (var word in stringOfWords.Skip(stringOfWords.Count - 3))
-                            {
-                                var isNumber = double.TryParse(word.Text, NumberStyles.Currency, culture, out double number);
-                                numbers.Add(number);
-                            }
-                            var qty = Math.Round(numbers[0], 2);
-                            var unit = Math.Round(numbers[1], 2);
-                            var ext_pdf = Math.Round(numbers[2], 2);
-                            var ext_calc = Math.Round(qty * unit, 2);
-                            if (Math.Abs(ext_calc - ext_pdf) >= 2.0) Debugger.Break(); // out more than 2$
-                            xlsm.Rows.Add(new object[] { date, location, section.ToString(), code, description, qty, unit, ext_pdf, ext_calc });
-                        }
-                        else if (typeColumn.Area == 0)
-                        {
-                            var typeWords = new List<Word>(stringOfWords.Where(w => w.Text.ToLower() == "type"));
-                            var gstWords = new List<Word>(stringOfWords.Where(w => w.Text.ToLower() == "gst"));
-                            if (typeWords.Any())
-                            {
-                                var typeBounds = typeWords.First().BoundingBox;
-                                var gstBounds = gstWords.First().BoundingBox;
-                                typeColumn = new PdfRectangle(typeBounds.Left, 0, typeBounds.Right, page.CropBox.Bounds.Height);
-                                gstColumn = new PdfRectangle(gstBounds.Left, 0, gstBounds.Right, page.CropBox.Bounds.Height);
-                            }
-                        }
-                        else if (section == InvoiceSection.totals & line.ToLowerInvariant() != "time|&|materials")
-                        {
-                            // summary section
-                            //Debugger.Break();
-                        }
-                    }
-                    var workDates = new List<DateTime>(xlsm.AsEnumerable.Where(r => r["type"].ToString() == "labour").Select(r => (DateTime)r["date"]));
-                    if (workDates.Any())
-                    {
-                        startDate = workDates.Min();
-                        endDate = workDates.Max();
-                    }
-                    //Debugger.Break();
-                }
-            }
-            try
-            {
-
-            }
-            catch { }
-            return Tuple.Create(pageText, invoiceDate, startDate, endDate, xlsm);
         }
         private static Dictionary<byte, List<Word>> Get_pageWords(Page page)
         {
@@ -234,23 +369,29 @@ namespace fhInventoryEditor
             SortWords(words);
             foreach (var word in words) indexedWords[indexedWords.Count] = word;
             byte lineCounter = 0;
-            while (indexedWords.Count > 0)
+            var startTime = DateTime.Now;
+            var timedOut = false;
+            while (indexedWords.Count > 0 & !timedOut)
             {
+                timedOut = DateTime.Now.Subtract(startTime).TotalSeconds >= 3;
                 var wordsByLine = new List<KeyValuePair<int, Word>>
                     (indexedWords.Where(w => !(from x in indexedWords where w.Value.BoundingBox.Top < x.Value.BoundingBox.Bottom select x).Any()));
+                if (!wordsByLine.Any())
+                    break;
                 words_byLine[lineCounter] = new List<Word>();
                 foreach (var word in wordsByLine)
                 {
                     words_byLine[lineCounter].Add(word.Value);
                     indexedWords.Remove(word.Key);
                 }
-                SortWords(words_byLine[lineCounter]);
+                words_byLine[lineCounter].Sort((w1, w2) => w1.BoundingBox.Left.CompareTo(w2.BoundingBox.Left));
                 lines[lineCounter] = words_byLine[lineCounter];
                 lineCounter++;
             }
+            if (timedOut) Debugger.Break();
             return lines;
         }
-        private static Dictionary<byte, string> Get_pageText(Page page)
+        internal static Dictionary<byte, string> Get_pageText(Page page)
         {
             var get_pageWords = Get_pageWords(page);
             return get_pageWords == null ? null : get_pageWords.ToDictionary(k => k.Key, v => string.Join(" ", v.Value.Select(w => w.Text)));
@@ -1503,7 +1644,7 @@ namespace fhInventoryEditor
                 }
             }
         }
-        private static string Printout()
+        internal static string Printout()
         {
             string client = null;
             string order = null;
