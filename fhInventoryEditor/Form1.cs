@@ -19,6 +19,7 @@ using System.Net.Mail;
 using HtmlAgilityPack;
 using System.Globalization;
 using Newtonsoft.Json.Linq;
+using DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing;
 
 namespace fhInventoryEditor
 {
@@ -743,6 +744,31 @@ namespace fhInventoryEditor
                 return $"{Name} Date {Date:yyyy-MM-dd} Total {Total:N2} Balances {balances}{overUnder}";
             }
         }
+        public readonly struct InstallSummary
+        {
+            public Dictionary<string, List<string>> Serials { get; }
+            public Trained Trained { get; }
+            public string Comments { get; }
+            public string Issues { get; }
+            public InstallSummary(string serials, string comments, string issues, Trained trained)
+            {
+                Serials = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(serials);
+                Comments = comments;
+                Issues = issues;
+                Trained = trained;
+            }
+        }
+        public readonly struct Trained
+        {
+            public List<string> Names { get; }
+            public Dictionary<string, string> Products { get; }
+            public Trained(string names, string products)
+            {
+                Names = JsonConvert.DeserializeObject<List<string>>(names);
+                Products = JsonConvert.DeserializeObject<Dictionary<string, string>>(products);
+            }
+            public override string ToString() => $"Trained {string.Join(",", Names)} on {Products.Count} products";
+        }
 
         private void Form1_Load(object sender, EventArgs e)
         {
@@ -768,15 +794,14 @@ namespace fhInventoryEditor
             //Get_pdfForms();
             //SaveAll_byType();
 
-            Edit_html("centrelecap", null, "monkey", "peanut");
-            Debugger.Break();
-
             //var testFolder = Get_invoices(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\JulesLeger"));
             //var inv = new Invoice(new FileInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\Carlyle MTL\\billing\\invoice_Carlyle MTL [0]_2015-06-27.pdf"));
 
-
+            const string foldername_approx = "lecap";
+            Set_installationSummary(foldername_approx);
+            Edit_html(foldername_approx, null);
+            Debugger.Break();
         }
-
         internal static void Get_stats()
         {
             const byte nbrYears = 5;
@@ -938,7 +963,62 @@ namespace fhInventoryEditor
             var get_pageWords = Get_pageWords(page);
             return get_pageWords == null ? null : get_pageWords.ToDictionary(k => k.Key, v => string.Join(" ", v.Value.Select(w => w.Text)));
         }
-        internal void Edit_html(string folder, string contactTitle = "Program and services coordinator", string comments = null, string issues = null)
+        private static string Get_productDescription(string code)
+        {
+            var products = new List<FileInfo>(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\templates\\Data\\products").EnumerateFiles());
+            string description = null;
+            var matches = new List<FileInfo>(products.Where(p => p.Name.Replace(".json", string.Empty) == code));
+            if (matches.Any())
+            {
+                JObject JSON = JObject.Parse(File.ReadAllText(matches.First().FullName));
+                description = JSON.GetValue("Name").ToString();
+            }
+            return description;
+        }
+        internal static void Set_installationSummary(string foldername_approx)
+        {
+            var folder = Get_directoryByName(foldername_approx);
+            // ----------- these elements come from a .txt file (INVENTORY)
+            string serialPath = $"{folder.FullName}\\serials.txt";
+            string trainedPath = $"{folder.FullName}\\trained.txt";
+            if (File.Exists(serialPath) & File.Exists(trainedPath))
+            {
+                var lines = new List<string>(File.ReadAllText(serialPath).Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries));
+                var serials = new Dictionary<string, List<string>>();
+                foreach (var line in lines)
+                {
+                    var elements = line.Split('\t');
+                    string code = elements.First();
+                    string description = ProperCase(Get_productDescription(code) ?? elements[1]);
+                    string key = $"{code} {description}";
+                    string serial = elements.Last();
+                    if (!serials.ContainsKey(key)) serials[key] = new List<string>();
+                    serials[key].Add($"N° {serial}");
+                }
+
+                lines = new List<string>(File.ReadAllText(trainedPath).Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries));
+                var trained = new Dictionary<string, string>();
+                foreach (var line in lines)
+                {
+                    var elements = line.Split('\t');
+                    string code = elements.First();
+                    string description = ProperCase(Get_productDescription(code) ?? elements[1]);
+                    trained[code] = description;
+                }
+
+                var staff = new List<string> { "? in lieu of Nadine" };
+
+                string comments = "Client will add electrical for the projector / wall washer after-the-fact";
+                string issues = "Wall washer requires adjustment as per below instructions... \r\n● Repeatedly press the “MODE” button on the wall washer until the display on the back of the wall washer displays “Addr.”\r\n● Now repeatedly press the “SET UP” button until the display shows “d.001” (or similar number).\r\n● Press “UP” and “DOWN” until the display shows “d.001”. Now press the “SET UP” button once.\r\n● Use the “UP” and “DOWN” buttons to select “03C.H”";
+
+                var indent = Formatting.Indented;
+                var trainedStaff = new Trained(JsonConvert.SerializeObject(staff, indent), JsonConvert.SerializeObject(trained, indent));
+                var summary = new InstallSummary(JsonConvert.SerializeObject(serials, indent), comments, issues, trainedStaff);
+
+                File.WriteAllText($"{folder.FullName}\\summary.json", JsonConvert.SerializeObject(summary, indent));
+            }
+        }
+        internal void Edit_html(string folder, string contactTitle = "Program and services coordinator")
         {
             // get last delivery form in a folder and tie it back to the matching quote AND invoice
             // 
@@ -950,15 +1030,16 @@ namespace fhInventoryEditor
                 var invoices = Get_invoices(directory);
                 if (forms.Item3.Any())
                 {
-                    string sourceIndexHTML = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\index.html";
-                    string destinationIndexHTML = $"{directory.FullName}\\a_jobSummary\\index.html";
-                    bool createFiles = !File.Exists(destinationIndexHTML);
+                    string sourceFile = "C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\index.html";
+                    string destinationFile = $"{directory.FullName}\\a_jobSummary\\index.html";
+                    bool createFiles = !File.Exists(destinationFile);
                     if (createFiles)
                         DirectoryCopy("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\", $"{directory.FullName}\\a_jobSummary\\", true);
                     else
-                        File.Copy(sourceIndexHTML, destinationIndexHTML, true);
+                        foreach (var filetype in new string[] { "index.html", "script.js", "design.css", "sending_email.php" })
+                            File.Copy(sourceFile.Replace("index.html", filetype), destinationFile.Replace("index.html", filetype), true);
 
-                    string sourceHtml = File.ReadAllText(sourceIndexHTML);
+                    string sourceHtml = File.ReadAllText(sourceFile);
                     htmlEditor.LoadHtml(sourceHtml);
 
                     var deliveryFiles = new List<FileInfo>(directory.EnumerateFiles("*delivery_*.pdf", SearchOption.TopDirectoryOnly));
@@ -972,7 +1053,7 @@ namespace fhInventoryEditor
                         quoteFiles.Sort((d1, d2) => d2.CreationTime.CompareTo(d1.CreationTime)); // last quote
                         var quoteForms = new List<ClientForm>(from q in quoteFiles select Parse_form(q));
 
-                        #region" html data "
+                        #region" get html data "
                         // there are 6 elements sourced from a delivery form, but only 4 (below) are used in the web page ( rep and rep's email are not used )
                         // ----------- these elements come from a DELIVERY form (order#, customer, contact, and phone)
                         var orders = new List<Table.Row>(deliveryForm.Contacts.AsEnumerable.Where(r => r["key"].ToString() == "Order#"));
@@ -1041,39 +1122,38 @@ namespace fhInventoryEditor
                             endDate = relatedInvoice.Date_end;
                         }
 
-                        var products = new List<FileInfo>(new DirectoryInfo("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\templates\\Data\\products").EnumerateFiles());
-                        foreach (var datafile in new string[] { "serials", "trained", "staff" })
+                        // ----------- these elements come from a json file (installationsummry struct)
+                        if (File.Exists($"{directory.FullName}\\summary.json"))
                         {
-                            // ----------- these elements come from a .txt file (INVENTORY)
-                            string dataPath = $"C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\CentreLeCap\\{datafile}.txt";
-                            string section = datafile == "serials" ? "serial" : datafile;
-                            if (File.Exists(dataPath))
+                            var summary = JObject.Parse(File.ReadAllText($"{directory.FullName}\\summary.json"));
+                            var serials = JsonConvert.DeserializeObject<Dictionary<string, List<string>>>(summary["Serials"].ToString());
+                            var names = new List<string>(from name in (JArray)summary["Trained"]["Names"] select (string)name);
+                            var products = JsonConvert.DeserializeObject<Dictionary<string, string>>(summary["Trained"]["Products"].ToString());
+                            string comments = (string)summary["Comments"];
+                            string issues = (string)summary["Issues"];
+                            if (comments != null)
+                                htmlEditor.GetElementbyId("comments").InnerHtml = comments;
+                            if (issues != null)
+                                htmlEditor.GetElementbyId("issues").InnerHtml = issues;
+
+                            foreach (var section in new string[] { "serial", "trained", "staff" })
                             {
-                                var inventory_trained = new List<string>(File.ReadAllText(dataPath).Split(new string[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries));
-                                var items = new List<Tuple<string, string, string>>(from i in inventory_trained select Tuple.Create(i.Split('\t')[0], i.Split('\t')[1], i.Split('\t')[2]));
-                                var installedSerialized = new Dictionary<string, string>();
-                                foreach (var item in items)
-                                {
-                                    string description = item.Item2;
-                                    var matches = new List<FileInfo>(products.Where(p => p.Name.Replace(".json", string.Empty) == item.Item1));
-                                    if (matches.Any())
-                                    {
-                                        JObject JSON = JObject.Parse(File.ReadAllText(matches.First().FullName));
-                                        description = JSON.GetValue("Name").ToString();
-                                    }
-                                    description = ProperCase(description);
-                                    installedSerialized.Add(description, item.Item3);
-                                }
+                                var items = new List<string>();
+                                if (section == "serial")
+                                    items.AddRange(serials.Select(s => $"{s.Key} [{string.Join(", ", s.Value)}]"));
+                                if (section == "trained")
+                                    items.AddRange(products.Select(s => $"{s.Key} {s.Value}"));
+                                if (section == "staff")
+                                    items.AddRange(names);
+
                                 // r1c1, r1c2, r1c3
                                 // r2c1, r2c2, r2c3
                                 byte row = 1;
                                 byte col = 1;
-                                string serial = deliveryForm.Language == DocumentLanguage.english ? "serial#" : "#série";
-                                // set html with serial#
-                                foreach (var item in installedSerialized)
+                                foreach (var item in items)
                                 {
                                     HtmlNode li = htmlEditor.GetElementbyId($"r{row}c{col}_{section}");
-                                    li.InnerHtml = $"{item.Key}, {serial}({item.Value})";
+                                    li.InnerHtml = item;
                                     col++;
                                     if (col == 4)
                                     {
@@ -1081,16 +1161,16 @@ namespace fhInventoryEditor
                                         row++;
                                     }
                                 }
+                                // remove extra elements
+                                for (row = 1; row < 10; row++)
+                                    for (col = 1; col < 4; col++)
+                                    {
+                                        HtmlNode li = htmlEditor.GetElementbyId($"r{row}c{col}_{section}");
+                                        if (li == null) { }
+                                        else
+                                            if (Regex.IsMatch(li.InnerText, "An|A (second|third) item")) { li.Remove(); }
+                                    }
                             }
-                            // remove extra elements
-                            for (var row = 1; row < 10; row++)
-                                for (var col = 1; col < 4; col++)
-                                {
-                                    HtmlNode li = htmlEditor.GetElementbyId($"r{row}c{col}_{section}");
-                                    if (li == null) { }
-                                    else
-                                        if (Regex.IsMatch(li.InnerText, "An|A (second|third) item")) { li.Remove(); }
-                                }
                         }
                         #endregion
 
@@ -1112,17 +1192,12 @@ namespace fhInventoryEditor
                         htmlEditor.GetElementbyId("addressPostalCode").SetAttributeValue("value", address_postal);
                         htmlEditor.GetElementbyId("startDate").SetAttributeValue("value", $"{beginDate:yyyy-MM-dd}");
                         htmlEditor.GetElementbyId("endDate").SetAttributeValue("value", $"{endDate:yyyy-MM-dd}");
-
-                        var xx = htmlEditor.GetElementbyId("comments");
-
-                        if (comments != null)
-                            htmlEditor.GetElementbyId("comments").InnerHtml = comments;
-                        if (issues != null)
-                            htmlEditor.GetElementbyId("issues").InnerHtml = issues;
                     }
-                    using (StreamWriter sw = new StreamWriter(destinationIndexHTML))
+                    // save the modifide index.html file
+                    using (StreamWriter sw = new StreamWriter(destinationFile))
                         htmlEditor.Save(sw);
-                    Process.Start(destinationIndexHTML);
+
+                    Process.Start(destinationFile);
                 }
             }
         }
