@@ -800,7 +800,8 @@ namespace fhInventoryEditor
             const string foldername_approx = "lecap";
             Set_installationSummary(foldername_approx);
             Edit_html(foldername_approx, null);
-            Debugger.Break();
+            Close();
+            //Debugger.Break();
         }
         internal static void Get_stats()
         {
@@ -975,6 +976,7 @@ namespace fhInventoryEditor
             }
             return description;
         }
+
         internal static void Set_installationSummary(string foldername_approx)
         {
             var folder = Get_directoryByName(foldername_approx);
@@ -1036,7 +1038,7 @@ namespace fhInventoryEditor
                     if (createFiles)
                         DirectoryCopy("C:\\Users\\SeanGlover\\Desktop\\Personal\\FH\\Jobs\\a_jobSummary\\", $"{directory.FullName}\\a_jobSummary\\", true);
                     else
-                        foreach (var filetype in new string[] { "index.html", "script.js", "design.css", "sending_email.php" })
+                        foreach (var filetype in new string[] { "index.html", "design.css", "script.js", "form-submission-handler.js" , "google-apps-script.js" })
                             File.Copy(sourceFile.Replace("index.html", filetype), destinationFile.Replace("index.html", filetype), true);
 
                     string sourceHtml = File.ReadAllText(sourceFile);
@@ -1201,6 +1203,7 @@ namespace fhInventoryEditor
                 }
             }
         }
+
         private static void DirectoryCopy(string sourceDirName, string destDirName, bool copySubDirs)
         {
             DirectoryInfo dir = new DirectoryInfo(sourceDirName);
